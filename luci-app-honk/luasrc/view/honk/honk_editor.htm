@@ -1,143 +1,273 @@
-<%+cbi/valueheader%>
-    <script src="/luci-static/resources/honk/lib/codemirror.js"></script>
-    <script src="/luci-static/resources/honk/addon/edit/matchbrackets.js"></script>
-    <script src="/luci-static/resources/honk/addon/fold/foldcode.js"></script>
-    <script src="/luci-static/resources/honk/addon/fold/foldgutter.js"></script>
-    <script src="/luci-static/resources/honk/addon/fold/indent-fold.js"></script>
-    <script src="/luci-static/resources/honk/mode/dae/dae.js"></script>
-    <link rel="stylesheet" href="/luci-static/resources/honk/addon/fold/foldgutter.css" />
-    <link rel="stylesheet" href="/luci-static/resources/honk/lib/codemirror.css" />
-    <link rel="stylesheet" href="/luci-static/resources/honk/theme/dracula.css" />
+// SPDX-License-Identifier: Apache-2.0
 
-    <style>
-        .cm-format-btn {
-            margin-bottom: 5px;
-            display: inline-block;
-        }
-        .CodeMirror {
-            border: 1px solid #6272a4;
-            border-radius: 6px;
-            height: auto;
-            min-height: 400px;
-            font-family: 'Fira Code', 'Monaco', 'Consolas', monospace !important;
-            font-size: 13px !important;
-            line-height: 1.5 !important;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-        }
-        /* 核心修复：强行同步所有内部 pre/line 节点属性，防止 OpenWrt 主题 (如 Argon/Edge) 全局 CSS 覆盖导致字符宽度测量失真 */
-        .CodeMirror pre.CodeMirror-line,
-        .CodeMirror pre.CodeMirror-line-like,
-        .CodeMirror-lines,
-        .CodeMirror-line,
-        .CodeMirror-code {
-            font-family: 'Fira Code', 'Monaco', 'Consolas', monospace !important;
-            font-size: 13px !important;
-            line-height: 1.5 !important;
-            letter-spacing: 0px !important;
-        }
+'use strict';
+'require form';
+'require fs';
+'require ui';
+'require view';
+'require rpc';
 
-        .cm-s-dracula .cm-keyword { color: #ff79c6 !important; font-weight: bold; }
-        .cm-s-dracula .cm-variable-3 { color: #ffb86c !important; }
-        .cm-s-dracula .cm-def { color: #50fa7b !important; }
-        .cm-s-dracula .cm-operator.marker { color: #ff79c6 !important; font-weight: bold; }
-        .cm-s-dracula .cm-operator { color: #ff79c6 !important; }
-        .cm-s-dracula .cm-number { color: #bd93f9 !important; }
-        .cm-s-dracula .cm-string { color: #f1fa8c !important; }
-        .cm-s-dracula .cm-comment { color: #6272a4 !important; font-style: italic; }
-        .cm-s-dracula.CodeMirror {
-            background-color: #282a36 !important;
-            color: #f8f8f2 !important;
-        }
-        .cm-s-dracula .CodeMirror-gutters { border-right: none !important; background-color: #282a36 !important; }
-        .cm-s-dracula .CodeMirror-linenumber { color: #6272a4 !important; }
-        .cm-s-dracula .CodeMirror-selected { background: #44475a !important; }
-        .cm-s-dracula .CodeMirror-activeline-background { background: #343746 !important; }
-        .cm-s-dracula .CodeMirror-matchingbracket { text-decoration: underline; color: #ffb86c !important; font-weight: bold; }
-    </style>
+var callFileWrite = rpc.declare({
+    object: 'file',
+    method: 'write',
+    params: ['path', 'data'],
+    expect: { result: false }
+});
 
-    <script type="text/javascript">//<![CDATA[
-        document.addEventListener('DOMContentLoaded', function() {
-            var textareas = document.querySelectorAll('textarea');
-            var editors = [];
+return view.extend({
+    editorInstance: null,
 
-            textareas.forEach(function(textarea) {
-                var editor = CodeMirror.fromTextArea(textarea, {
-                    mode: "dae",
-                    indentUnit: 4,
-                    tabSize: 4,
-                    styleActiveLine: true,
-                    lineNumbers: true,
-                    theme: "dracula",
-                    lineWrapping: false, // 修复：取消 lineWrapping，防止长行折行时坐标换算失效引发的光标飞走问题
-                    matchBrackets: true,
-                    foldGutter: true,
-                    gutters: ["CodeMirror-linenumbers", "CodeMirror-foldgutter"]
-                });
+    handleSaveApply: function (ev, mode) {
+        var self = this;
+        var value = '';
 
-                editor.on("inputRead", function(cm, change) {
-                    if (change.origin !== "+input") return;
-                    var val = change.text[0];
-                    var pairs = { '{': '}', '[': ']', '(': ')', '"': '"', "'": "'" };
-                    if (pairs[val]) {
-                        var cur = cm.getCursor();
-                        cm.replaceRange(pairs[val], cur);
-                        cm.setCursor(cur);
-                    }
-                });
-
-                // 核心修复：延迟 100ms 强制 CodeMirror 重新计算 DOM 渲染几何尺寸
-                setTimeout(function() {
-                    editor.refresh();
-                }, 100);
-
-                editors.push(editor);
-
-                var formatBtn = document.createElement('button');
-                formatBtn.type = 'button';
-                formatBtn.className = 'cbi-button cbi-button-apply cm-format-btn';
-                formatBtn.innerText = '<%:Format Code%>';
-                formatBtn.onclick = function() {
-                    editor.operation(function() {
-                        var cursor = editor.getCursor();
-                        var content = editor.getValue();
-
-                        var lines = content.split('\n');
-                        var formattedLines = lines.map(function(line) {
-                            if (line.trim().startsWith('#') || line.trim().startsWith('//')) return line;
-                            line = line.replace(/\s*->\s*/g, ' -> ');
-                            line = line.replace(/\s*&&\s*/g, ' && ');
-                            line = line.replace(/(['"])([a-zA-Z0-9_-]+)\1/g, function(match, quote, word) {
-                                return word;
-                            });
-                            return line.trimEnd();
-                        });
-
-                        editor.setValue(formattedLines.join('\n'));
-
-                        for (var i = 0; i < editor.lineCount(); i++) {
-                            editor.indentLine(i, "smart");
-                        }
-                        editor.setCursor(cursor);
-                    });
-                };
-
-                textarea.parentNode.insertBefore(formatBtn, textarea.nextSibling);
-
-                var form = textarea.closest('form');
-                if (form && !form.dataset.cmHooked) {
-                    form.addEventListener('submit', function() {
-                        editors.forEach(function(e) {
-                            e.operation(function() {
-                                for (var i = 0; i < e.lineCount(); i++) {
-                                    e.indentLine(i, "smart");
-                                }
-                            });
-                            e.save();
-                        });
-                    });
-                    form.dataset.cmHooked = "true";
+        if (self.editorInstance) {
+            self.editorInstance.operation(function() {
+                for (var i = 0; i < self.editorInstance.lineCount(); i++) {
+                    self.editorInstance.indentLine(i, "smart");
                 }
             });
+            self.editorInstance.save();
+            value = self.editorInstance.getValue();
+        } else {
+            var el = document.getElementById('cbid_duck_config__configuration');
+            value = el ? el.value : '';
+        }
+
+        if (!value) {
+            ui.addNotification(null, E('p', _('Configuration cannot be empty!')), 'error');
+            return Promise.reject(new Error('Empty configuration'));
+        }
+
+        return callFileWrite('/etc/duck/config.dae', value)
+            .then(function () {
+                return L.resolveDefault(fs.exec_direct('/bin/chmod', ['0600', '/etc/duck/config.dae']), null)
+                    .then(function () {
+                        return fs.exec_direct('/etc/init.d/duck', ['status'])
+                            .then(function (res) {
+                                if (res.code !== 0) {
+                                    return L.resolveDefault(fs.exec_direct('/etc/init.d/duck', ['restart']), null);
+                                } else {
+                                    return L.resolveDefault(fs.exec_direct('/etc/init.d/duck', ['hot_reload']), null);
+                                }
+                            });
+                    });
+            }).catch(function (e) {
+                ui.addNotification(null, E('p', _('Failed to save configuration: %s').format(e.message)));
+                return Promise.reject(e);
+            });
+    },
+
+    load: function () {
+        return fs.read_direct('/etc/duck/config.dae', 'text')
+            .then(function (content) {
+                return content ?? '';
+            }).catch(function (e) {
+                if (e.toString().includes('NotFoundError'))
+                    return fs.read_direct('/etc/duck/example.dae', 'text')
+                        .then(function (content) {
+                            return content ?? '';
+                        }).catch(function (e) {
+                            return '';
+                        });
+
+                ui.addNotification(null, E('p', e.message));
+                return '';
+            });
+    },
+
+    render: function (content) {
+        var m, s;
+        var self = this;
+
+        self.formvalue = {};
+
+        var css = E('style', {}, `
+            .cm-format-btn {
+                margin-bottom: 5px;
+                display: inline-block;
+            }
+            .CodeMirror {
+                border: 1px solid #6272a4;
+                border-radius: 6px;
+                height: auto;
+                min-height: 400px;
+                font-family: 'Fira Code', 'Monaco', 'Consolas', monospace !important;
+                font-size: 13px !important;
+                line-height: 1.5 !important;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            }
+            /* 核心修复：强行同步所有内部 pre/line 节点属性，防止 OpenWrt 主题 (如 Argon/Edge) 全局 CSS 覆盖导致字符宽度测量失真 */
+            .CodeMirror pre.CodeMirror-line,
+            .CodeMirror pre.CodeMirror-line-like,
+            .CodeMirror-lines,
+            .CodeMirror-line,
+            .CodeMirror-code {
+                font-family: 'Fira Code', 'Monaco', 'Consolas', monospace !important;
+                font-size: 13px !important;
+                line-height: 1.5 !important;
+                letter-spacing: 0px !important;
+            }
+
+            .cm-s-dracula .cm-keyword { color: #ff79c6 !important; font-weight: bold; }
+            .cm-s-dracula .cm-variable-3 { color: #ffb86c !important; }
+            .cm-s-dracula .cm-def { color: #50fa7b !important; }
+            .cm-s-dracula .cm-operator.marker { color: #ff79c6 !important; font-weight: bold; }
+            .cm-s-dracula .cm-operator { color: #ff79c6 !important; }
+            .cm-s-dracula .cm-number { color: #bd93f9 !important; }
+            .cm-s-dracula .cm-string { color: #f1fa8c !important; }
+            .cm-s-dracula .cm-comment { color: #6272a4 !important; font-style: italic; }
+            .cm-s-dracula.CodeMirror {
+                background-color: #282a36 !important;
+                color: #f8f8f2 !important;
+            }
+            .cm-s-dracula .CodeMirror-gutters { border-right: none !important; background-color: #282a36 !important; }
+            .cm-s-dracula .CodeMirror-linenumber { color: #6272a4 !important; }
+            .cm-s-dracula .CodeMirror-selected { background: #44475a !important; }
+            .cm-s-dracula .CodeMirror-activeline-background { background: #343746 !important; }
+            .cm-s-dracula .CodeMirror-matchingbracket { text-decoration: underline; color: #ffb86c !important; font-weight: bold; }
+        `);
+
+        var textarea = E('textarea', {
+            id: 'cbid_duck_config__configuration',
+            name: 'cbid.duck.config._configuration',
+            style: 'width:100%;'
+        }, [ content ]);
+
+        var container = E('div', { id: 'code_editor_container' }, [ textarea ]);
+
+        m = new form.Map('duck', _('Configuration'),
+            _('Here you can edit dae configuration. It will be hot-reloaded automatically after apply.'));
+
+        m.onValidate = function (map, data) {
+            self.formvalue = data;
+        };
+
+        m.submitSave = function () {
+            return false;
+        };
+
+        s = m.section(form.TypedSection);
+        s.anonymous = true;
+
+        s.render = function () {
+            return E('div', { 'class': 'cbi-section' }, [
+                css,
+                container
+            ]);
+        };
+
+        var formEl = m.render();
+
+        // 动态注入样式表
+        var cssFiles = [
+            '/luci-static/resources/honk/addon/fold/foldgutter.css',
+            '/luci-static/resources/honk/lib/codemirror.css',
+            '/luci-static/resources/honk/theme/dracula.css'
+        ];
+
+        cssFiles.forEach(function(href) {
+            if (!document.querySelector('link[href="' + href + '"]')) {
+                var link = document.createElement('link');
+                link.rel = 'stylesheet';
+                link.href = href;
+                document.head.appendChild(link);
+            }
         });
-    //]]></script>
-<%+cbi/valuefooter%>
+
+        // 动态链式加载 JS 依赖包
+        function loadScript(src) {
+            return new Promise(function(resolve, reject) {
+                if (document.querySelector('script[src="' + src + '"]')) {
+                    resolve();
+                    return;
+                }
+                var script = document.createElement('script');
+                script.src = src;
+                script.onload = resolve;
+                script.onerror = reject;
+                document.head.appendChild(script);
+            });
+        }
+
+        window.setTimeout(function () {
+            loadScript('/luci-static/resources/honk/lib/codemirror.js')
+                .then(function() {
+                    return Promise.all([
+                        loadScript('/luci-static/resources/honk/addon/edit/matchbrackets.js'),
+                        loadScript('/luci-static/resources/honk/addon/fold/foldcode.js'),
+                        loadScript('/luci-static/resources/honk/addon/fold/foldgutter.js'),
+                        loadScript('/luci-static/resources/honk/addon/fold/indent-fold.js'),
+                        loadScript('/luci-static/resources/honk/mode/dae/dae.js')
+                    ]);
+                })
+                .then(function() {
+                    var editor = CodeMirror.fromTextArea(textarea, {
+                        mode: "dae",
+                        indentUnit: 4,
+                        tabSize: 4,
+                        styleActiveLine: true,
+                        lineNumbers: true,
+                        theme: "dracula",
+                        lineWrapping: false, // 修复：取消 lineWrapping，防止长行折行时坐标换算失效引发的光标飞走问题
+                        matchBrackets: true,
+                        foldGutter: true,
+                        gutters: ["CodeMirror-linenumbers", "CodeMirror-foldgutter"]
+                    });
+
+                    editor.on("inputRead", function(cm, change) {
+                        if (change.origin !== "+input") return;
+                        var val = change.text[0];
+                        var pairs = { '{': '}', '[': ']', '(': ')', '"': '"', "'": "'" };
+                        if (pairs[val]) {
+                            var cur = cm.getCursor();
+                            cm.replaceRange(pairs[val], cur);
+                            cm.setCursor(cur);
+                        }
+                    });
+
+                    // 核心修复：延迟 100ms 强制 CodeMirror 重新计算 DOM 渲染几何尺寸
+                    setTimeout(function() {
+                        editor.refresh();
+                    }, 100);
+
+                    self.editorInstance = editor;
+
+                    var formatBtn = document.createElement('button');
+                    formatBtn.type = 'button';
+                    formatBtn.className = 'cbi-button cbi-button-apply cm-format-btn';
+                    formatBtn.innerText = _('Format Code');
+                    formatBtn.onclick = function() {
+                        editor.operation(function() {
+                            var cursor = editor.getCursor();
+                            var content = editor.getValue();
+
+                            var lines = content.split('\n');
+                            var formattedLines = lines.map(function(line) {
+                                if (line.trim().startsWith('#') || line.trim().startsWith('//')) return line;
+                                line = line.replace(/\s*->\s*/g, ' -> ');
+                                line = line.replace(/\s*&&\s*/g, ' && ');
+                                line = line.replace(/(['"])([a-zA-Z0-9_-]+)\1/g, function(match, quote, word) {
+                                    return word;
+                                });
+                                return line.trimEnd();
+                            });
+
+                            editor.setValue(formattedLines.join('\n'));
+
+                            for (var i = 0; i < editor.lineCount(); i++) {
+                                editor.indentLine(i, "smart");
+                            }
+                            editor.setCursor(cursor);
+                        });
+                    };
+
+                    textarea.parentNode.insertBefore(formatBtn, textarea);
+                }).catch(function(e) {
+                    ui.addNotification(null, E('p', _('Failed to load CodeMirror resources: %s').format(e.message)));
+                });
+        }, 100);
+
+        return formEl;
+    }
+});
