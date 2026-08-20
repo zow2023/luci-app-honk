@@ -124,3 +124,87 @@ msgstr "面板"
 msgid "操作失败，请查看日志"
 msgstr "操作失败，请查看日志"
 
+
+msgid "Control"
+msgstr "控制"
+
+msgid "Configuration cannot be empty!"
+msgstr "配置不能为空！"
+
+msgid "Configuration saved and applied."
+msgstr "配置已保存并应用。"
+
+msgid "Configuration saved."
+msgstr "配置已保存。"
+
+msgid "Failed to save configuration: %s"
+msgstr "保存配置失败：%s"
+
+msgid "Failed to update autostart: %s"
+msgstr "更新开机自启失败：%s"
+
+msgid "Service action failed: %s"
+msgstr "服务操作失败：%s"
+
+msgid "Failed to load CodeMirror resources: %s"
+msgstr "加载 CodeMirror 资源失败：%s"
+
+msgid "Every Day"
+msgstr "每天"
+
+msgid "Every Monday"
+msgstr "每周一"
+
+msgid "Every Tuesday"
+msgstr "每周二"
+
+msgid "Every Wednesday"
+msgstr "每周三"
+
+msgid "Every Thursday"
+msgstr "每周四"
+
+msgid "Every Friday"
+msgstr "每周五"
+
+msgid "Every Saturday"
+msgstr "每周六"
+
+msgid "Every Sunday"
+msgstr "每周日"
+
+msgid "Filter logs..."
+msgstr "筛选日志..."
+
+msgid "Clear Filter"
+msgstr "清除筛选"
+
+msgid "Pause Refresh"
+msgstr "暂停刷新"
+
+msgid "Resume Refresh"
+msgstr "恢复刷新"
+
+msgid "Scroll to head"
+msgstr "滚动到顶部"
+
+msgid "Scroll to tail"
+msgstr "滚动到末尾"
+
+msgid "Clear Log"
+msgstr "清空日志"
+
+msgid "Refresh every 2 seconds."
+msgstr "每 2 秒刷新一次。"
+
+msgid "Are you sure you want to clear the log file?"
+msgstr "确定要清空日志文件吗？"
+
+msgid "Log is empty."
+msgstr "日志为空。"
+
+msgid "Log file does not exist."
+msgstr "日志文件不存在。"
+
+msgid "Unknown error: %s"
+msgstr "未知错误：%s"
