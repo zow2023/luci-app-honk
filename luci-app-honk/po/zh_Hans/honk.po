@@ -76,3 +76,51 @@ msgstr "更新时间（每天）"
 msgid "Format Code"
 msgstr "格式化代码"
 
+msgid "控制"
+msgstr "控制"
+
+msgid "配置"
+msgstr "配置"
+
+msgid "日志"
+msgstr "日志"
+
+msgid "加载中"
+msgstr "加载中"
+
+msgid "基于 Rust eBPF 的高性能透明代理解决方案 (honk 引擎) 。"
+msgstr "基于 Rust eBPF 的高性能透明代理解决方案 (honk 引擎) 。"
+
+msgid "内存占用"
+msgstr "内存占用"
+
+msgid "运行时间"
+msgstr "运行时间"
+
+msgid "引擎版本"
+msgstr "引擎版本"
+
+msgid "服务"
+msgstr "服务"
+
+msgid "开机自启"
+msgstr "开机自启"
+
+msgid "状态控制"
+msgstr "状态控制"
+
+msgid "启动"
+msgstr "启动"
+
+msgid "重启"
+msgstr "重启"
+
+msgid "停止"
+msgstr "停止"
+
+msgid "面板"
+msgstr "面板"
+
+msgid "操作失败，请查看日志"
+msgstr "操作失败，请查看日志"
+
