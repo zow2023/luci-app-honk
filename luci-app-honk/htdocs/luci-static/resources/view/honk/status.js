@@ -182,12 +182,13 @@ return view.extend({
         var css = E('style', {}, '\
             .honk-dashboard{max-width:900px;margin:0 auto;padding:8px 0 24px} \
             .honk-dashboard *{box-sizing:border-box} \
-            .honk-dashboard h1{display:inline-block;margin:0 12px 6px 0;font-size:34px;line-height:1.1} \
+            .honk-header{display:flex;align-items:center;justify-content:flex-start;gap:12px;margin-bottom:6px} \
+            .honk-dashboard h1{margin:0;font-size:28px;line-height:1.1} \
             .honk-description{margin:0 0 26px;color:var(--text-color-secondary,#666);font-size:14px} \
-            .honk-badge{display:inline-block;padding:8px 16px;border-radius:999px;font-size:14px;font-weight:700;vertical-align:6px} \
-            .honk-dot{display:inline-block;width:10px;height:10px;margin-right:8px;border-radius:50%;background:currentColor} \
-            .honk-cards{display:flex;flex-wrap:wrap;margin:-8px 0 18px} \
-            .honk-card{flex:1 1 calc(33.333% - 16px);min-width:220px;margin:8px;padding:18px;border:1px solid var(--border-color-medium,#d9d9d9);border-radius:12px;background:var(--background-color-primary,#fff)} \
+            .honk-badge{display:inline-flex;align-items:center;padding:6px 14px;border-radius:999px;font-size:13px;font-weight:700} \
+            .honk-dot{display:inline-block;width:8px;height:8px;margin-right:8px;border-radius:50%;background:currentColor} \
+            .honk-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:0 0 18px} \
+            .honk-card{padding:18px;border:1px solid var(--border-color-medium,#d9d9d9);border-radius:12px;background:var(--background-color-primary,#fff)} \
             .honk-label{color:var(--text-color-secondary,#666);font-size:13px;font-weight:700} \
             .honk-value{margin-top:12px;font-size:24px;font-weight:800;color:#20a965;word-break:break-all} \
             .honk-card.version .honk-value{color:inherit;font-size:18px} \
@@ -199,11 +200,11 @@ return view.extend({
             .honk-switch:after{content:"";position:absolute;top:4px;left:4px;width:26px;height:26px;border-radius:50%;background:#fff;transition:left .18s ease} \
             .honk-switch.on:after{left:34px} \
             .honk-actions{display:flex;flex-wrap:wrap;gap:10px} \
-            @media(max-width:640px){.honk-card{flex:1 1 100%}}'
+            @media(max-width:640px){.honk-cards{grid-template-columns:1fr}}'
         );
 
         var viewEl = E('div', { 'class': 'honk-dashboard' }, [
-            E('div', {}, [
+            E('div', { 'class': 'honk-header' }, [
                 E('h1', {}, 'HONK'),
                 E('span', { 'id': 'honk_badge', 'class': 'honk-badge' }, [
                     E('span', { 'class': 'honk-dot' }),
