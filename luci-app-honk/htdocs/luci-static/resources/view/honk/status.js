@@ -45,6 +45,9 @@ function parseVersion(execResult) {
 
 return view.extend({
     serviceEnabled: false,
+    lastRx: 0,
+    lastTx: 0,
+    lastTime: 0,
 
     load: function () {
         return Promise.all([
@@ -52,6 +55,15 @@ return view.extend({
             L.resolveDefault(callServiceList('honk'), {}),
             L.resolveDefault(fs.exec('/usr/bin/honk-core', ['--version']), null)
         ]);
+    },
+
+    formatBytes: function (bytes) {
+        if (bytes === 0 || isNaN(bytes) || bytes < 0) return '0 B';
+        var k = 1024;
+        var sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+        var i = Math.floor(Math.log(bytes) / Math.log(k));
+        if (i >= sizes.length) i = sizes.length - 1;
+        return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
     },
 
     getMemoryUsage: function (pid) {
@@ -93,6 +105,26 @@ return view.extend({
             if (minutes > 0)
                 return minutes + 'm ' + seconds + 's';
             return seconds + 's';
+        });
+    },
+
+    getTrafficStats: function () {
+        return L.resolveDefault(fs.read_direct('/proc/net/dev', 'text'), '').then(function (dev) {
+            var rx = 0, tx = 0;
+            var lines = (dev || '').split('\n');
+            for (var i = 0; i < lines.length; i++) {
+                var line = lines[i].trim();
+                if (!line || line.indexOf(':') === -1) continue;
+                var parts = line.split(':');
+                var iface = parts[0].trim();
+                if (iface === 'lo') continue;
+                var stats = parts[1].trim().split(/\s+/);
+                if (stats.length >= 9) {
+                    rx += parseInt(stats[0], 10) || 0;
+                    tx += parseInt(stats[8], 10) || 0;
+                }
+            }
+            return { rx: rx, tx: tx };
         });
     },
 
@@ -138,10 +170,12 @@ return view.extend({
 
         return Promise.all([
             L.resolveDefault(callServiceList('honk'), {}),
-            L.resolveDefault(fs.exec('/usr/bin/honk-core', ['--version']), null)
+            L.resolveDefault(fs.exec('/usr/bin/honk-core', ['--version']), null),
+            self.getTrafficStats()
         ]).then(function (results) {
             var instanceInfo = getInstanceInfo(results[0]);
             var version = parseVersion(results[1]);
+            var traffic = results[2];
             var autostart = uci.get('honk', 'config', 'enabled') === '1';
 
             self.serviceEnabled = autostart;
@@ -155,6 +189,8 @@ return view.extend({
                 var uptime = document.getElementById('honk_uptime');
                 var versionEl = document.getElementById('honk_version');
                 var autostartEl = document.getElementById('honk_autostart');
+                var rateEl = document.getElementById('honk_traffic_rate');
+                var totalEl = document.getElementById('honk_traffic_total');
 
                 if (badge) {
                     badge.innerHTML = '<span class="honk-dot"></span>' + (instanceInfo.running ? _('RUNNING') : _('NOT RUNNING'));
@@ -170,6 +206,32 @@ return view.extend({
                     versionEl.textContent = version;
                 if (autostartEl)
                     autostartEl.className = 'honk-switch' + (autostart ? ' on' : '');
+
+                if (instanceInfo.running) {
+                    var now = Date.now();
+                    var timeDiff = self.lastTime ? (now - self.lastTime) / 1000 : 0;
+                    var rxRate = 0, txRate = 0;
+
+                    if (timeDiff > 0 && self.lastRx > 0) {
+                        rxRate = Math.max(0, (traffic.rx - self.lastRx) / timeDiff);
+                        txRate = Math.max(0, (traffic.tx - self.lastTx) / timeDiff);
+                    }
+
+                    self.lastRx = traffic.rx;
+                    self.lastTx = traffic.tx;
+                    self.lastTime = now;
+
+                    if (rateEl)
+                        rateEl.textContent = self.formatBytes(txRate) + '/s ↑ / ' + self.formatBytes(rxRate) + '/s ↓';
+                    if (totalEl)
+                        totalEl.textContent = self.formatBytes(traffic.tx) + ' ↑ / ' + self.formatBytes(traffic.rx) + ' ↓';
+                } else {
+                    self.lastRx = 0;
+                    self.lastTx = 0;
+                    self.lastTime = 0;
+                    if (rateEl) rateEl.textContent = '0 B/s ↑ / 0 B/s ↓';
+                    if (totalEl) totalEl.textContent = '0 B ↑ / 0 B ↓';
+                }
             });
         });
     },
@@ -180,10 +242,10 @@ return view.extend({
         self.serviceEnabled = uci.get('honk', 'config', 'enabled') === '1';
 
         var css = E('style', {}, '\
-            .honk-dashboard{max-width:900px;margin:0 auto;padding:8px 0 24px} \
+            .honk-dashboard{margin:0;padding:8px 0 24px} \
             .honk-dashboard *{box-sizing:border-box} \
             .honk-header{display:flex;align-items:center;justify-content:flex-start;gap:12px;margin-bottom:6px} \
-            .honk-dashboard h1{margin:0;font-size:28px;line-height:1.1} \
+            .honk-dashboard h1{margin:0;font-size:28px;line-height:1.1;color:#f59e0b} \
             .honk-description{margin:0 0 26px;color:var(--text-color-secondary,#666);font-size:14px} \
             .honk-badge{display:inline-flex;align-items:center;padding:6px 14px;border-radius:999px;font-size:13px;font-weight:700} \
             .honk-dot{display:inline-block;width:8px;height:8px;margin-right:8px;border-radius:50%;background:currentColor} \
@@ -192,7 +254,8 @@ return view.extend({
             .honk-label{color:var(--text-color-secondary,#666);font-size:13px;font-weight:700} \
             .honk-value{margin-top:12px;font-size:24px;font-weight:800;color:#20a965;word-break:break-all} \
             .honk-card.version .honk-value{color:inherit;font-size:18px} \
-            .honk-section{margin-top:22px;padding:18px;border:1px solid var(--border-color-medium,#d9d9d9);border-radius:12px;background:var(--background-color-primary,#fff)} \
+            .honk-bottom-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:22px} \
+            .honk-section{padding:18px;border:1px solid var(--border-color-medium,#d9d9d9);border-radius:12px;background:var(--background-color-primary,#fff)} \
             .honk-section h2{margin:0 0 16px;font-size:18px} \
             .honk-service{display:flex;align-items:center;gap:14px;margin-bottom:18px} \
             .honk-switch{position:relative;width:64px;height:34px;border:0;border-radius:999px;background:#777;cursor:pointer} \
@@ -200,7 +263,9 @@ return view.extend({
             .honk-switch:after{content:"";position:absolute;top:4px;left:4px;width:26px;height:26px;border-radius:50%;background:#fff;transition:left .18s ease} \
             .honk-switch.on:after{left:34px} \
             .honk-actions{display:flex;flex-wrap:wrap;gap:10px} \
-            @media(max-width:640px){.honk-cards{grid-template-columns:1fr}}'
+            .honk-traffic-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px} \
+            .honk-subvalue{margin-top:8px;font-size:16px;font-weight:700;color:var(--text-color-primary,#333)} \
+            @media(max-width:640px){.honk-cards,.honk-bottom-row,.honk-traffic-grid{grid-template-columns:1fr}}'
         );
 
         var viewEl = E('div', { 'class': 'honk-dashboard' }, [
@@ -226,40 +291,55 @@ return view.extend({
                     E('div', { 'id': 'honk_version', 'class': 'honk-value' }, version)
                 ])
             ]),
-            E('section', { 'class': 'honk-section' }, [
-                E('h2', {}, _('服务')),
-                E('div', { 'class': 'honk-service' }, [
-                    E('button', {
-                        'id': 'honk_autostart',
-                        'class': 'honk-switch' + (self.serviceEnabled ? ' on' : ''),
-                        'type': 'button',
-                        'click': function () {
-                            self.setAutostart(!self.serviceEnabled);
-                        }
-                    }),
-                    E('span', {}, _('开机自启'))
+            E('div', { 'class': 'honk-bottom-row' }, [
+                E('section', { 'class': 'honk-section' }, [
+                    E('h2', {}, _('服务')),
+                    E('div', { 'class': 'honk-service' }, [
+                        E('button', {
+                            'id': 'honk_autostart',
+                            'class': 'honk-switch' + (self.serviceEnabled ? ' on' : ''),
+                            'type': 'button',
+                            'click': function () {
+                                self.setAutostart(!self.serviceEnabled);
+                            }
+                        }),
+                        E('span', {}, _('开机自启'))
+                    ]),
+                    E('div', { 'class': 'honk-actions' }, [
+                        E('button', {
+                            'class': 'btn cbi-button cbi-button-positive',
+                            'type': 'button',
+                            'click': function () { self.handleAction('start'); }
+                        }, _('启动')),
+                        E('button', {
+                            'class': 'btn cbi-button cbi-button-apply',
+                            'type': 'button',
+                            'click': function () { self.handleAction('restart'); }
+                        }, _('重启')),
+                        E('button', {
+                            'class': 'btn cbi-button cbi-button-negative',
+                            'type': 'button',
+                            'click': function () { self.handleAction('stop'); }
+                        }, _('停止')),
+                        E('button', {
+                            'class': 'btn cbi-button cbi-button-neutral',
+                            'type': 'button',
+                            'click': function () { window.location.href = L.url('admin/services/honk/global'); }
+                        }, _('面板'))
+                    ])
                 ]),
-                E('div', { 'class': 'honk-actions' }, [
-                    E('button', {
-                        'class': 'btn cbi-button cbi-button-positive',
-                        'type': 'button',
-                        'click': function () { self.handleAction('start'); }
-                    }, _('启动')),
-                    E('button', {
-                        'class': 'btn cbi-button cbi-button-apply',
-                        'type': 'button',
-                        'click': function () { self.handleAction('restart'); }
-                    }, _('重启')),
-                    E('button', {
-                        'class': 'btn cbi-button cbi-button-negative',
-                        'type': 'button',
-                        'click': function () { self.handleAction('stop'); }
-                    }, _('停止')),
-                    E('button', {
-                        'class': 'btn cbi-button cbi-button-neutral',
-                        'type': 'button',
-                        'click': function () { window.location.href = L.url('admin/services/honk/global'); }
-                    }, _('面板'))
+                E('section', { 'class': 'honk-section' }, [
+                    E('h2', {}, _('代理流量统计')),
+                    E('div', { 'class': 'honk-traffic-grid' }, [
+                        E('div', { 'class': 'honk-traffic-item' }, [
+                            E('div', { 'class': 'honk-label' }, _('实时速率 (上/下)')),
+                            E('div', { 'id': 'honk_traffic_rate', 'class': 'honk-subvalue' }, '0 B/s ↑ / 0 B/s ↓')
+                        ]),
+                        E('div', { 'class': 'honk-traffic-item' }, [
+                            E('div', { 'class': 'honk-label' }, _('累计流量 (发/收)')),
+                            E('div', { 'id': 'honk_traffic_total', 'class': 'honk-subvalue' }, '0 B ↑ / 0 B ↓')
+                        ])
+                    ])
                 ])
             ])
         ]);
