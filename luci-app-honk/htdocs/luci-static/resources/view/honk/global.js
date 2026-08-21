@@ -122,12 +122,10 @@ return view.extend({
             return Promise.reject(new Error('Empty configuration'));
         }
 
-        var enabled = document.getElementById('honk-enabled').checked ? '1' : '0';
         var autoUpdate = document.getElementById('honk-auto-update').checked ? '1' : '0';
         var weekTime = document.getElementById('honk-week-time').value;
         var dayTime = document.getElementById('honk-day-time').value;
 
-        uci.set('honk', 'config', 'enabled', enabled);
         uci.set('honk', 'config', 'subscribe_auto_update', autoUpdate);
         uci.set('honk', 'config', 'subscribe_update_week_time', weekTime);
         uci.set('honk', 'config', 'subscribe_update_day_time', dayTime);
@@ -138,9 +136,7 @@ return view.extend({
             if (!applyChanges)
                 return null;
             return uci.apply().then(function () {
-                return fs.exec('/etc/init.d/honk', [enabled === '1' ? 'enable' : 'disable']);
-            }).then(function () {
-                return fs.exec('/etc/init.d/honk', [enabled === '1' ? 'restart' : 'stop']);
+                return fs.exec('/etc/init.d/honk', ['restart']);
             });
         }).then(function () {
             ui.addNotification(null, E('p', applyChanges ? _('Configuration saved and applied.') : _('Configuration saved.')), 'info');
@@ -181,10 +177,11 @@ return view.extend({
             .honk-editor-page .hint{margin:0 0 16px;color:var(--text-color-secondary,#666)} \
             .honk-card{margin-bottom:18px;padding:18px;border:1px solid var(--border-color-medium,#d9d9d9);border-radius:12px;background:var(--background-color-primary,#fff)} \
             .honk-card h3{margin:0 0 12px;font-size:18px} \
-            .honk-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px} \
-            .honk-field label{display:block;margin-bottom:6px;font-weight:700} \
-            .honk-checkbox{display:flex;align-items:center;gap:8px;min-height:42px} \
-            .honk-select{width:100%;padding:7px 10px} \
+            .honk-vbox{display:flex;flex-direction:column;gap:14px;max-width:320px} \
+            .honk-field{display:flex;flex-direction:column;align-items:flex-start;gap:6px} \
+            .honk-field.honk-checkbox{flex-direction:row;align-items:center;gap:8px;min-height:auto} \
+            .honk-field label{font-weight:700} \
+            .honk-select{width:100%;padding:7px 10px;box-sizing:border-box} \
             .honk-toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px} \
             .CodeMirror{border:1px solid #6272a4;border-radius:8px;min-height:480px;font-family:Monaco,Consolas,monospace !important;font-size:13px !important;line-height:1.5 !important} \
             .CodeMirror pre.CodeMirror-line,.CodeMirror pre.CodeMirror-line-like,.CodeMirror-lines,.CodeMirror-line,.CodeMirror-code{font-family:Monaco,Consolas,monospace !important;font-size:13px !important;line-height:1.5 !important;letter-spacing:0 !important}'
@@ -194,12 +191,19 @@ return view.extend({
             E('h2', {}, _('Global Settings')),
             E('p', { 'class': 'hint' }, _('Configure global settings for HONK.')),
             E('div', { 'class': 'honk-card' }, [
-                E('h3', {}, _('基础设置')),
-                E('div', { 'class': 'honk-grid' }, [
-                    E('div', { 'class': 'honk-field honk-checkbox' }, [E('input', { 'id': 'honk-enabled', 'type': 'checkbox', 'checked': uci.get('honk', 'config', 'enabled') === '1' }), E('label', { 'for': 'honk-enabled' }, _('Enabled'))]),
-                    E('div', { 'class': 'honk-field honk-checkbox' }, [E('input', { 'id': 'honk-auto-update', 'type': 'checkbox', 'checked': autoUpdate }), E('label', { 'for': 'honk-auto-update' }, _('Enable Auto Subscribe Update'))]),
-                    E('div', { 'class': 'honk-field' }, [E('label', { 'for': 'honk-week-time' }, _('Update Cycle')), E('select', { 'id': 'honk-week-time', 'class': 'cbi-input-select honk-select' }, weekOptions.map(function (item) { return E('option', { 'value': item[0], 'selected': item[0] === currentWeek }, item[1]); }))]),
-                    E('div', { 'class': 'honk-field' }, [E('label', { 'for': 'honk-day-time' }, _('Update Time (Every Day)')), E('select', { 'id': 'honk-day-time', 'class': 'cbi-input-select honk-select' }, hourOptions)])
+                E('div', { 'class': 'honk-vbox' }, [
+                    E('div', { 'class': 'honk-field honk-checkbox' }, [
+                        E('input', { 'id': 'honk-auto-update', 'type': 'checkbox', 'checked': autoUpdate }),
+                        E('label', { 'for': 'honk-auto-update' }, _('Enable Auto Subscribe Update'))
+                    ]),
+                    E('div', { 'class': 'honk-field' }, [
+                        E('label', { 'for': 'honk-week-time' }, _('Update Cycle')),
+                        E('select', { 'id': 'honk-week-time', 'class': 'cbi-input-select honk-select' }, weekOptions.map(function (item) { return E('option', { 'value': item[0], 'selected': item[0] === currentWeek }, item[1]); }))
+                    ]),
+                    E('div', { 'class': 'honk-field' }, [
+                        E('label', { 'for': 'honk-day-time' }, _('Update Time (Every Day)')),
+                        E('select', { 'id': 'honk-day-time', 'class': 'cbi-input-select honk-select' }, hourOptions)
+                    ])
                 ])
             ]),
             E('div', { 'class': 'honk-card' }, [
