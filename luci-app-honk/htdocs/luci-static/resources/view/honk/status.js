@@ -15,6 +15,14 @@ var callServiceList = rpc.declare({
     expect: { '': {} }
 });
 
+// 新增：读取 honk-core 自身维护的代理流量统计（由 rpcd 后端 honk.uc 暴露）
+var callHonkStats = rpc.declare({
+    object: 'honk',
+    method: 'getStats',
+    params: [],
+    expect: { '': {} }
+});
+
 function getInstanceInfo(serviceData) {
     try {
         var instance = serviceData.honk.instances.honk;
@@ -55,8 +63,10 @@ return view.extend({
             uci.load('honk'),
             L.resolveDefault(callServiceList('honk'), {}),
             L.resolveDefault(fs.exec('/usr/bin/honk-core', ['--version']), null)
-        var self = this;
-            return self.resolveWanInterfaces().then(function () { return results; });
+        ]).then(function (results) {
+            return self.resolveWanInterfaces().then(function () {
+                return results;
+            });
         });
     },
 
@@ -111,32 +121,17 @@ return view.extend({
         });
     },
 
+    // 改为调用 honk-core 自己维护的统计，而不是读 /proc/net/dev
+    // 期望后端返回 { tx_bytes: <number>, rx_bytes: <number> }，
+    // 且该计数器应在 honk-core 进程(重新)启动时清零，只统计经过代理转发的流量
     getTrafficStats: function () {
-        var self = this;
-        return L.resolveDefault(
-            fs.read_direct('/proc/net/dev', 'text'),
-            ''
-        ).then(function (dev) {                        
-            var rx = 0, tx = 0;
-            var lines = (dev || '').split('\n');
-            var wanNames = (self.wanInterfaces && self.wanInterfaces.length)
-                ? self.wanInterfaces
-                : ['eth0', 'eth1', 'wan', 'br-wan'];
-            var allow = { 'br-lan': true };
-            wanNames.forEach(function (n) { allow[n] = true; });            
-            for (var i = 0; i < lines.length; i++) {
-                var line = lines[i].trim();
-                if (!line || line.indexOf(':') === -1) continue;
-                var parts = line.split(':');
-                var iface = parts[0].trim();
-                if (!allow[iface]) continue;
-                var stats = parts[1].trim().split(/\s+/);
-                if (stats.length >= 9) {
-                    rx += parseInt(stats[0], 10) || 0;
-                    tx += parseInt(stats[8], 10) || 0;
-                }
-            }
-            return { rx: rx, tx: tx };
+        return L.resolveDefault(callHonkStats(), null).then(function (res) {
+            if (!res || typeof res.tx_bytes === 'undefined' || typeof res.rx_bytes === 'undefined')
+                return { rx: 0, tx: 0 };
+            return {
+                rx: parseInt(res.rx_bytes, 10) || 0,
+                tx: parseInt(res.tx_bytes, 10) || 0
+            };
         });
     },
 
@@ -186,7 +181,7 @@ return view.extend({
                 E('p', _('请先打开"开机自启"开关，再点击 启动。')),
                 'warning');
             return Promise.resolve();
-        }        
+        }
 
         return self.execService(action).then(function () {
             return self.updateDashboard();
@@ -201,7 +196,7 @@ return view.extend({
 
     updateDashboard: function () {
         var self = this;
-       
+
         var trafficPromise = self.getTrafficStats().catch(function () {
             return { rx: 0, tx: 0 };
         });
