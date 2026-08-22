@@ -3,7 +3,8 @@
         "description": "Grant access for luci-app-honk",
         "read": {
             "ubus": {
-                "service": [ "list" ]
+                "service": [ "list" ],
+                "honk": [ "getStats" ]
             },
             "uci": [ "honk" ],
             "file": {
@@ -16,7 +17,6 @@
                 "/proc/*/status": [ "read" ],
                 "/proc/*/stat": [ "read" ],
                 "/proc/net/dev": [ "read" ],
-                "/etc/honk/config.dae": [ "read" ],
                 "/usr/bin/honk-core --version": [ "exec" ],
                 "/etc/init.d/honk status": [ "exec" ]
             }
