@@ -50,17 +50,20 @@ return view.extend({
     lastTime: 0,
 
     load: function () {
+        var self = this;
         return Promise.all([
             uci.load('honk'),
             L.resolveDefault(callServiceList('honk'), {}),
             L.resolveDefault(fs.exec('/usr/bin/honk-core', ['--version']), null)
-        ]);
+        var self = this;
+            return self.resolveWanInterfaces().then(function () { return results; });
+        });
     },
 
     formatBytes: function (bytes) {
         if (bytes === 0 || isNaN(bytes) || bytes < 0) return '0 B';
         var k = 1024;
-        var sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+        var sizes = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
         var i = Math.floor(Math.log(bytes) / Math.log(k));
         if (i >= sizes.length) i = sizes.length - 1;
         return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
@@ -109,15 +112,24 @@ return view.extend({
     },
 
     getTrafficStats: function () {
-        return L.resolveDefault(fs.read_direct('/proc/net/dev', 'text'), '').then(function (dev) {
+        var self = this;
+        return L.resolveDefault(
+            fs.read_direct('/proc/net/dev', 'text'),
+            ''
+        ).then(function (dev) {                        
             var rx = 0, tx = 0;
             var lines = (dev || '').split('\n');
+            var wanNames = (self.wanInterfaces && self.wanInterfaces.length)
+                ? self.wanInterfaces
+                : ['eth0', 'eth1', 'wan', 'br-wan'];
+            var allow = { 'br-lan': true };
+            wanNames.forEach(function (n) { allow[n] = true; });            
             for (var i = 0; i < lines.length; i++) {
                 var line = lines[i].trim();
                 if (!line || line.indexOf(':') === -1) continue;
                 var parts = line.split(':');
                 var iface = parts[0].trim();
-                if (iface === 'lo') continue;
+                if (!allow[iface]) continue;
                 var stats = parts[1].trim().split(/\s+/);
                 if (stats.length >= 9) {
                     rx += parseInt(stats[0], 10) || 0;
@@ -125,6 +137,18 @@ return view.extend({
                 }
             }
             return { rx: rx, tx: tx };
+        });
+    },
+
+    resolveWanInterfaces: function () {
+        var self = this;
+        return L.resolveDefault(fs.read_direct('/etc/honk/config.dae', 'text'), '').then(function (raw) {
+            var list = ['eth0', 'eth1', 'wan', 'br-wan'];
+            var m = (raw || '').match(/^\s*wan_interface\s*:\s*([^\s]+)/m);
+            if (m && m[1] && m[1] !== 'auto')
+                list.unshift(m[1]);
+            self.wanInterfaces = list;
+            return list;
         });
     },
 
@@ -157,21 +181,35 @@ return view.extend({
     handleAction: function (action) {
         var self = this;
 
+        if (action === 'start' && !self.serviceEnabled) {
+            ui.addNotification(null,
+                E('p', _('请先打开"开机自启"开关，再点击 启动。')),
+                'warning');
+            return Promise.resolve();
+        }        
+
         return self.execService(action).then(function () {
             return self.updateDashboard();
         }).catch(function (err) {
-            ui.addNotification(null, E('p', _('Service action failed: %s').format(err.message || err)), 'error');
+            var link = E('a', { href: L.url('admin/services/honk/log') }, _('查看日志'));
+            ui.addNotification(null,
+                E('p', _('服务操作失败：%s').format(err.message || err), link),
+                'error');
             throw err;
         });
     },
 
     updateDashboard: function () {
         var self = this;
+       
+        var trafficPromise = self.getTrafficStats().catch(function () {
+            return { rx: 0, tx: 0 };
+        });
 
         return Promise.all([
             L.resolveDefault(callServiceList('honk'), {}),
             L.resolveDefault(fs.exec('/usr/bin/honk-core', ['--version']), null),
-            self.getTrafficStats()
+            trafficPromise
         ]).then(function (results) {
             var instanceInfo = getInstanceInfo(results[0]);
             var version = parseVersion(results[1]);
@@ -212,7 +250,7 @@ return view.extend({
                     var timeDiff = self.lastTime ? (now - self.lastTime) / 1000 : 0;
                     var rxRate = 0, txRate = 0;
 
-                    if (timeDiff > 0 && self.lastRx > 0) {
+                    if (timeDiff > 0 && self.lastTime > 0) {
                         rxRate = Math.max(0, (traffic.rx - self.lastRx) / timeDiff);
                         txRate = Math.max(0, (traffic.tx - self.lastTx) / timeDiff);
                     }
@@ -320,12 +358,7 @@ return view.extend({
                             'class': 'btn cbi-button cbi-button-negative',
                             'type': 'button',
                             'click': function () { self.handleAction('stop'); }
-                        }, _('停止')),
-                        E('button', {
-                            'class': 'btn cbi-button cbi-button-neutral',
-                            'type': 'button',
-                            'click': function () { window.location.href = L.url('admin/services/honk/global'); }
-                        }, _('面板'))
+                        }, _('停止'))
                     ])
                 ]),
                 E('section', { 'class': 'honk-section' }, [
