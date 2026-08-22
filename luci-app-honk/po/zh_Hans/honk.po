@@ -146,6 +146,12 @@ msgstr "更新开机自启失败：%s"
 msgid "Service action failed: %s"
 msgstr "服务操作失败：%s"
 
+msgid "Please enable \"Autostart\" before clicking Start."
+msgstr "请先打开\"开机自启\"开关，再点击 启动。"
+
+msgid "View Logs"
+msgstr "查看日志"
+
 msgid "Failed to load CodeMirror resources: %s"
 msgstr "加载 CodeMirror 资源失败：%s"
 
