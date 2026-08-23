@@ -52,18 +52,18 @@ define Package/honk
 endef
 
 define Package/honk/config
-	choice
-		prompt "BTF source for CO-RE"
-		default HONK_USE_KERNEL_BTF
-		depends on PACKAGE_honk
+    choice
+        prompt "BTF source for CO-RE"
+        default HONK_USE_KERNEL_BTF
+        depends on PACKAGE_honk
 
-	config HONK_USE_KERNEL_BTF
-		bool "Use kernel BTF (integrated)"
-		depends on KERNEL_DEBUG_INFO_BTF
+    config HONK_USE_KERNEL_BTF
+        bool "Use kernel BTF (integrated)"
+        depends on KERNEL_DEBUG_INFO_BTF
 
-	config HONK_USE_VMLINUX_BTF
-		bool "Use vmlinux-btf package"
-	endchoice
+    config HONK_USE_VMLINUX_BTF
+        bool "Use vmlinux-btf package"
+    endchoice
 endef
 
 define Package/honk/conffiles
@@ -89,7 +89,7 @@ define Package/honk/install
 	$(INSTALL_CONF) $(CURDIR)/files/config.d/node.dae $(1)/etc/honk/config.d/node.dae
 	$(INSTALL_CONF) $(CURDIR)/files/config.d/route.dae $(1)/etc/honk/config.d/route.dae
 	$(INSTALL_CONF) $(CURDIR)/files/config.d/dns.dae $(1)/etc/honk/config.d/dns.dae
-    $(INSTALL_CONF) $(CURDIR)/files/config.d/api.dae $(1)/etc/honk/config.d/api.dae
+	$(INSTALL_CONF) $(CURDIR)/files/config.d/api.dae $(1)/etc/honk/config.d/api.dae
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) $(CURDIR)/files/honk.config $(1)/etc/config/honk
 
