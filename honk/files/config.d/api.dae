@@ -1,0 +1,12 @@
+# config.d/api.dae
+# Enables the Clash-compatible HTTP API used by the LuCI status panel
+# to read live/cumulative traffic stats via /stats.
+# API is bound to localhost only; no external exposure, no auth needed.
+experimental {
+    clash_api {
+        external_controller: '127.0.0.1:9090'
+        external_ui: '/etc/honk/zashboard'
+        secret: ''
+        default_mode: 'Rule'
+    }
+}
