@@ -127,6 +127,11 @@ return view.extend({
                 return null;
             return uci.apply().then(function () {
                 return fs.exec('/etc/init.d/honk', ['restart']);
+            }).then(function (res) {
+                if (res && res.code !== 0) {
+                    var errMsg = (res.stderr || res.stdout || _('Failed to restart service')).trim();
+                    throw new Error(errMsg);
+                }
             });
         }).then(function () {
             ui.addNotification(null, E('p', applyChanges ? _('Configuration saved and applied.') : _('Configuration saved.')), 'info');
@@ -146,6 +151,24 @@ return view.extend({
 
     handleReset: function () {
         window.location.reload();
+    },
+
+    handleReloadService: function () {
+        ui.showModal(_('Reloading...'), [
+            E('p', { 'class': 'spinning' }, _('Reloading service configuration...'))
+        ]);
+        return fs.exec('/etc/init.d/honk', ['hot_reload']).then(function (res) {
+            ui.hideModal();
+            if (res && res.code !== 0) {
+                var errMsg = (res.stderr || res.stdout || _('Failed to reload service')).trim();
+                ui.addNotification(null, E('p', _('Reload failed: %s').format(errMsg)), 'error');
+            } else {
+                ui.addNotification(null, E('p', _('Service reloaded successfully.')), 'info');
+            }
+        }).catch(function (err) {
+            ui.hideModal();
+            ui.addNotification(null, E('p', _('Reload failed: %s').format(err.message || err)), 'error');
+        });
     },
 
     render: function (data) {
@@ -170,7 +193,7 @@ return view.extend({
                 E('p', { 'class': 'hint' }, _('Correctly configure the include field for separate-config to work, or enter complete configuration here.')),
                 E('div', { 'class': 'honk-toolbar' }, [
                     E('button', { 'type': 'button', 'class': 'btn cbi-button cbi-button-neutral', 'click': function () { self.formatCode(); } }, _('Format Code')),
-                    E('button', { 'type': 'button', 'class': 'btn cbi-button cbi-button-apply', 'click': function () { fs.exec('/etc/init.d/honk', ['hot_reload']); } }, _('Reload Service'))
+                    E('button', { 'type': 'button', 'class': 'btn cbi-button cbi-button-apply', 'click': function () { self.handleReloadService(); } }, _('Reload Service'))
                 ]),
                 E('textarea', { 'id': 'honk-config-editor', 'style': 'width:100%;min-height:480px' }, content)
             ])
