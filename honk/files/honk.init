@@ -148,23 +148,22 @@ service_triggers() {
 }
 
 hot_reload() {
-    local config_file
-    config_load "$CONF"
-    config_get config_file "config" "config_file" "/etc/honk/config.dae"
+    if "$0" running; then    
+        local config_file
+        config_load "$CONF"
+        config_get config_file "config" "config_file" "/etc/honk/config.dae"
 
-    set_chmod_640
+        set_chmod_640
 
-    # 2. 重载前的配置校验
-    local val_out
-    val_out=$("$PROG" validate --config "$config_file" 2>&1)
-    if [ $? -ne 0 ]; then
-        logger -t "honk" -p daemon.err "Hot-reload aborted. Configuration validation failed:"
-        logger -t "honk" -p daemon.err "$val_out"
-        echo "Configuration validation failed: $val_out" >&2
-        return 1
-    fi
+        local val_out
+        val_out=$("$PROG" validate --config "$config_file" 2>&1)
+        if [ $? -ne 0 ]; then
+            logger -t "honk" -p daemon.err "Hot-reload aborted. Configuration validation failed:"
+            logger -t "honk" -p daemon.err "$val_out"
+            echo "Configuration validation failed: $val_out" >&2
+            return 1
+        fi
 
-    if "$0" running; then
         "$PROG" reload
     else
         start
