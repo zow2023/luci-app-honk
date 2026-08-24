@@ -104,17 +104,6 @@ start_service() {
     config_get config_file "config" "config_file" "/etc/honk/config.dae"
 
     set_chmod_640
-
-    # 1. 配置预校验：如果不符合规范，抛出错误并阻止服务启动
-    local val_out
-    val_out=$("$PROG" validate --config "$config_file" 2>&1)
-    if [ $? -ne 0 ]; then
-        logger -t "honk" -p daemon.err "Configuration validation failed:"
-        logger -t "honk" -p daemon.err "$val_out"
-        echo "Configuration validation failed: $val_out" >&2
-        return 1
-    fi
-
     update_cron "add"
     cleanup_netns
     hijack_resolv_conf
@@ -127,6 +116,7 @@ start_service() {
     procd_set_param limits nofile="1000000 1000000"
     procd_set_param term_timeout 8
     procd_set_param respawn 3600 5 5
+    # 允许 procd 收集进程的标准输出与标准错误写入 logread
     procd_set_param stdout 1
     procd_set_param stderr 1
     procd_close_instance
@@ -148,22 +138,8 @@ service_triggers() {
 }
 
 hot_reload() {
-    if "$0" running; then    
-        local config_file
-        config_load "$CONF"
-        config_get config_file "config" "config_file" "/etc/honk/config.dae"
-
-        set_chmod_640
-
-        local val_out
-        val_out=$("$PROG" validate --config "$config_file" 2>&1)
-        if [ $? -ne 0 ]; then
-            logger -t "honk" -p daemon.err "Hot-reload aborted. Configuration validation failed:"
-            logger -t "honk" -p daemon.err "$val_out"
-            echo "Configuration validation failed: $val_out" >&2
-            return 1
-        fi
-
+    set_chmod_640
+    if "$0" running; then
         "$PROG" reload
     else
         start
