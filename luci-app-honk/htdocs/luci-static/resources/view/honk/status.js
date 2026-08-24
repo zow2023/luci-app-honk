@@ -15,7 +15,6 @@ var callServiceList = rpc.declare({
     expect: { '': {} }
 });
 
-// 新增：读取 honk-core 自身维护的代理流量统计（由 rpcd 后端 honk.uc 暴露）
 var callHonkStats = rpc.declare({
     object: 'honk',
     method: 'getStats',
@@ -45,10 +44,15 @@ function parseVersion(execResult) {
 
     text = (text || '').trim();
     if (!text)
-        return '0.0.1-alpha';
+        return '--';
 
-    var match = text.match(/version\s+([^\s]+)/i) || text.match(/honk(?:-core)?\s+([^\s]+)/i);
-    return match ? match[1] : (text.split('\n')[0] || '0.0.1-alpha');
+    // 匹配 "honk-core 0.0.1-alpha" 或 "version 0.0.1" 等输出
+    var match = text.match(/honk(?:-core)?\s+v?([^\s]+)/i) || text.match(/version\s+v?([^\s]+)/i);
+    if (match && match[1])
+        return match[1];
+
+    var firstLine = text.split('\n')[0].trim();
+    return firstLine || '--';
 }
 
 return view.extend({
@@ -121,9 +125,6 @@ return view.extend({
         });
     },
 
-    // 改为调用 honk-core 自己维护的统计，而不是读 /proc/net/dev
-    // 期望后端返回 { tx_bytes: <number>, rx_bytes: <number> }，
-    // 且该计数器应在 honk-core 进程(重新)启动时清零，只统计经过代理转发的流量
     getTrafficStats: function () {
         return L.resolveDefault(callHonkStats(), null).then(function (res) {
             if (!res || typeof res.tx_bytes === 'undefined' || typeof res.rx_bytes === 'undefined')
