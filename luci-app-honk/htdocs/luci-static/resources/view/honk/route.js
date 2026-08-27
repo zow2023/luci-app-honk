@@ -99,16 +99,43 @@ return view.extend({
         return this.editorInstance ? this.editorInstance.getValue() : (document.getElementById('honk-editor') || {}).value || '';
     },
 
+    execServiceAction: function (action) {
+        return fs.exec('/etc/init.d/honk', [action]).then(function (res) {
+            if (res && typeof res.code !== 'undefined' && res.code !== 0)
+                return Promise.reject(new Error((res.stderr || res.stdout || (action + ' failed')).trim()));
+            return res;
+        });
+    },
+
+    handleReloadService: function () {
+        var self = this;
+        ui.showModal(_('Reloading...'), [
+            E('p', { 'class': 'spinning' }, _('Reloading service configuration...'))
+        ]);
+
+        return self.execServiceAction('reload').then(function () {
+            ui.hideModal();
+            ui.addNotification(null, E('p', _('Service reloaded successfully.')), 'info');
+        }).catch(function (err) {
+            ui.hideModal();
+            ui.addNotification(null, E('p', _('Reload failed: %s').format(err.message || err)), 'error');
+        });
+    },
+
     savePage: function (applyChanges) {
-        var content = this.getEditorValue().replace(/\r\n?/g, '\n');
+        var self = this;
+        var content = self.getEditorValue().replace(/\r\n?/g, '\n');
         if (!content.trim()) {
             ui.addNotification(null, E('p', _('Configuration cannot be empty!')), 'error');
             return Promise.reject(new Error('Empty configuration'));
         }
+
         return callFileWrite(CONFIG_PATH, content).then(function () {
-            return applyChanges ? fs.exec('/etc/init.d/honk', ['hot_reload']) : null;
-        }).then(function () {
-            ui.addNotification(null, E('p', applyChanges ? _('Configuration saved and applied.') : _('Configuration saved.')), 'info');
+            if (applyChanges) {
+                return self.handleReloadService();
+            } else {
+                ui.addNotification(null, E('p', _('Configuration saved.')), 'info');
+            }
         }).catch(function (err) {
             ui.addNotification(null, E('p', _('Failed to save configuration: %s').format(err.message || err)), 'error');
             throw err;
@@ -121,7 +148,13 @@ return view.extend({
 
     render: function (content) {
         var self = this;
-        var css = E('style', {}, '            .honk-editor-page{max-width:1000px}             .honk-editor-page .hint{margin:0 0 16px;color:var(--text-color-secondary,#666)}             .honk-card{margin-bottom:18px;padding:18px;border:1px solid var(--border-color-medium,#d9d9d9);border-radius:12px;background:var(--background-color-primary,#fff)}             .honk-toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px}             .CodeMirror{border:1px solid #6272a4;border-radius:8px;min-height:480px;font-family:Monaco,Consolas,monospace !important;font-size:13px !important;line-height:1.5 !important}             .CodeMirror pre.CodeMirror-line,.CodeMirror pre.CodeMirror-line-like,.CodeMirror-lines,.CodeMirror-line,.CodeMirror-code{font-family:Monaco,Consolas,monospace !important;font-size:13px !important;line-height:1.5 !important;letter-spacing:0 !important}'
+        var css = E('style', {}, '\
+            .honk-editor-page{max-width:1000px}\
+            .honk-editor-page .hint{margin:0 0 16px;color:var(--text-color-secondary,#666)}\
+            .honk-card{margin-bottom:18px;padding:18px;border:1px solid var(--border-color-medium,#d9d9d9);border-radius:12px;background:var(--background-color-primary,#fff)}\
+            .honk-toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px}\
+            .CodeMirror{border:1px solid #6272a4;border-radius:8px;min-height:480px;font-family:Monaco,Consolas,monospace !important;font-size:13px !important;line-height:1.5 !important}\
+            .CodeMirror pre.CodeMirror-line,.CodeMirror pre.CodeMirror-line-like,.CodeMirror-lines,.CodeMirror-line,.CodeMirror-code{font-family:Monaco,Consolas,monospace !important;font-size:13px !important;line-height:1.5 !important;letter-spacing:0 !important}'
         );
         var root = E('div', { 'class': 'honk-editor-page' }, [
             E('h2', {}, _('Routing Settings')),
@@ -129,7 +162,7 @@ return view.extend({
             E('div', { 'class': 'honk-card' }, [
                 E('div', { 'class': 'honk-toolbar' }, [
                     E('button', { 'type': 'button', 'class': 'btn cbi-button cbi-button-neutral', 'click': function () { self.formatCode(); } }, _('Format Code')),
-                    E('button', { 'type': 'button', 'class': 'btn cbi-button cbi-button-apply', 'click': function () { fs.exec('/etc/init.d/honk', ['hot_reload']); } }, _('Reload Service'))
+                    E('button', { 'type': 'button', 'class': 'btn cbi-button cbi-button-apply', 'click': function () { self.savePage(true); } }, _('Reload Service'))
                 ]),
                 E('h3', {}, _('Route Configuration')),
                 E('textarea', { 'id': 'honk-editor', 'style': 'width:100%;min-height:480px' }, content || '')
