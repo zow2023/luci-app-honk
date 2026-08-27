@@ -129,8 +129,7 @@ service_stopped() {
 }
 
 reload_service() {
-    stop
-    start
+    hot_reload
 }
 
 service_triggers() {
@@ -139,9 +138,11 @@ service_triggers() {
 
 hot_reload() {
     set_chmod_640
-    if "$0" running; then
+    if /etc/init.d/honk running; then
+        logger -t honk "hot reload"
         "$PROG" reload
     else
+        logger -t honk "not running, start"
         start
     fi
 }
