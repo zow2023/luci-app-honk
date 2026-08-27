@@ -151,7 +151,7 @@ return view.extend({
     execService: function (action) {
         return fs.exec('/etc/init.d/honk', [action]).then(function (res) {
             if (res && typeof res.code !== 'undefined' && res.code !== 0)
-                return Promise.reject(new Error((res.stderr || res.stdout || action) + ' failed'));
+                return Promise.reject(new Error((res.stderr || res.stdout || (action + ' failed')).trim()));
             return res;
         });
     },
