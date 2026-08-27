@@ -115,21 +115,45 @@ return view.extend({
         return this.editorInstance ? this.editorInstance.getValue() : (document.getElementById('honk-config-editor') || {}).value || '';
     },
 
+    execServiceAction: function (action) {
+        return fs.exec('/etc/init.d/honk', [action]).then(function (res) {
+            if (res && typeof res.code !== 'undefined' && res.code !== 0)
+                return Promise.reject(new Error((res.stderr || res.stdout || (action + ' failed')).trim()));
+            return res;
+        });
+    },
+
+    handleReloadService: function () {
+        var self = this;
+        ui.showModal(_('Reloading...'), [
+            E('p', { 'class': 'spinning' }, _('Reloading service configuration...'))
+        ]);
+
+        return self.execServiceAction('reload').then(function () {
+            ui.hideModal();
+            ui.addNotification(null, E('p', _('Service reloaded successfully.')), 'info');
+        }).catch(function (err) {
+            ui.hideModal();
+            ui.addNotification(null, E('p', _('Reload failed: %s').format(err.message || err)), 'error');
+        });
+    },
+
     savePage: function (applyChanges) {
-        var content = this.getEditorValue().replace(/\r\n?/g, '\n');
+        var self = this;
+        var content = self.getEditorValue().replace(/\r\n?/g, '\n');
         if (!content.trim()) {
             ui.addNotification(null, E('p', _('Configuration cannot be empty!')), 'error');
             return Promise.reject(new Error('Empty configuration'));
         }
 
         return callFileWrite(CONFIG_PATH, content).then(function () {
-            if (!applyChanges)
+            if (!applyChanges) {
+                ui.addNotification(null, E('p', _('Configuration saved.')), 'info');
                 return null;
+            }
             return uci.apply().then(function () {
-                return fs.exec('/etc/init.d/honk', ['restart']);
+                return self.handleReloadService();
             });
-        }).then(function () {
-            ui.addNotification(null, E('p', applyChanges ? _('Configuration saved and applied.') : _('Configuration saved.')), 'info');
         }).catch(function (err) {
             ui.addNotification(null, E('p', _('Failed to save configuration: %s').format(err.message || err)), 'error');
             throw err;
@@ -146,19 +170,6 @@ return view.extend({
 
     handleReset: function () {
         window.location.reload();
-    },
-
-    handleReloadService: function () {
-        ui.showModal(_('Reloading...'), [
-            E('p', { 'class': 'spinning' }, _('Reloading service configuration...'))
-        ]);
-        return fs.exec('/etc/init.d/honk', ['hot_reload']).then(function () {
-            ui.hideModal();
-            ui.addNotification(null, E('p', _('Service reloaded successfully.')), 'info');
-        }).catch(function (err) {
-            ui.hideModal();
-            ui.addNotification(null, E('p', _('Reload failed: %s').format(err.message || err)), 'error');
-        });
     },
 
     render: function (data) {
@@ -183,7 +194,7 @@ return view.extend({
                 E('p', { 'class': 'hint' }, _('Correctly configure the include field for separate-config to work, or enter complete configuration here.')),
                 E('div', { 'class': 'honk-toolbar' }, [
                     E('button', { 'type': 'button', 'class': 'btn cbi-button cbi-button-neutral', 'click': function () { self.formatCode(); } }, _('Format Code')),
-                    E('button', { 'type': 'button', 'class': 'btn cbi-button cbi-button-apply', 'click': function () { self.handleReloadService(); } }, _('Reload Service'))
+                    E('button', { 'type': 'button', 'class': 'btn cbi-button cbi-button-apply', 'click': function () { self.savePage(true); } }, _('Reload Service'))
                 ]),
                 E('textarea', { 'id': 'honk-config-editor', 'style': 'width:100%;min-height:480px' }, content)
             ])
