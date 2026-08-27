@@ -15,6 +15,13 @@ var callFileWrite = rpc.declare({
     expect: { result: false }
 });
 
+var callServiceList = rpc.declare({
+    object: 'service',
+    method: 'list',
+    params: ['name'],
+    expect: { '': {} }
+});
+
 var LOG_PATH = '/var/log/honk/honk.log';
 
 return view.extend({
@@ -22,6 +29,24 @@ return view.extend({
     originalLogContent: '',
     logEntriesCache: null,
     debounceTimer: null,
+
+    isServiceRunning: function () {
+        return L.resolveDefault(callServiceList('honk'), {}).then(function (svc) {
+            try {
+                return !!svc.honk.instances.honk.running;
+            } catch (e) {
+                return false;
+            }
+        });
+    },
+
+    renderBlank: function () {
+        var logText = document.getElementById('log_textarea');
+        if (!logText) return;
+        var pre = E('pre');
+        pre.innerHTML = '';
+        dom.content(logText, pre);
+    },
 
     formatLogLine: function (line) {
         line = line.replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -67,7 +92,7 @@ return view.extend({
         if (!filter) {
             var pre = logContainer.querySelector('pre');
             if (pre) {
-                pre.innerHTML = this.originalLogContent || _('Log is empty.');
+                pre.innerHTML = this.originalLogContent || '';
                 this.logEntriesCache = null;
             }
             return;
@@ -97,7 +122,7 @@ return view.extend({
         var logText = document.getElementById('log_textarea');
         if (!logText) return;
         var pre = E('pre');
-        pre.innerHTML = this.originalLogContent || _('Log is empty.');
+        pre.innerHTML = this.originalLogContent || '';
         dom.content(logText, pre);
         var filterInput = document.getElementById('filterInput');
         if (filterInput && filterInput.value) this.applyFilter(filterInput.value);
@@ -106,12 +131,22 @@ return view.extend({
     refreshLog: function () {
         var self = this;
         if (self.isPaused) return Promise.resolve();
-        return L.resolveDefault(fs.read_direct(LOG_PATH, 'text'), '').then(function (content) {
-            self.renderLog(content);
+
+        return self.isServiceRunning().then(function (running) {
+            if (!running) {
+                self.originalLogContent = '';
+                self.logEntriesCache = null;
+                self.renderBlank();
+                return;
+            }
+
+            return L.resolveDefault(fs.read_direct(LOG_PATH, 'text'), '').then(function (content) {
+                self.renderLog(content);
+            });
         }).catch(function (err) {
             var logText = document.getElementById('log_textarea');
             if (logText)
-                dom.content(logText, E('pre', {}, err && err.toString().indexOf('NotFoundError') > -1 ? _('Log file does not exist.') : _('Unknown error: %s').format(err)));
+                dom.content(logText, E('pre', {}, _('Unknown error: %s').format(err)));
         });
     },
 
@@ -122,7 +157,7 @@ return view.extend({
             self.originalLogContent = '';
             self.logEntriesCache = null;
             var logText = document.getElementById('log_textarea');
-            if (logText) dom.content(logText, E('pre', {}, _('Log is empty.')));
+            if (logText) dom.content(logText, E('pre', {}, ''));
         });
     },
 
@@ -153,7 +188,7 @@ return view.extend({
                 ])
             ]),
             E('div', { 'class': 'cbi-section' }, [
-                E('div', { 'id': 'log_textarea' }, E('pre', {}, _('Collecting data...'))),
+                E('div', { 'id': 'log_textarea' }, E('pre', {}, '')),
                 E('div', { 'style': 'text-align:right;margin-top:5px' }, E('small', {}, _('Refresh every 2 seconds.')))
             ])
         ]);
@@ -168,7 +203,7 @@ return view.extend({
             if (clearFilterButton) clearFilterButton.addEventListener('click', function () { if (filterInput) filterInput.value = ''; self.applyFilter(''); self.logEntriesCache = null; });
             if (refreshToggleButton) refreshToggleButton.addEventListener('click', function () { self.isPaused = !self.isPaused; this.innerHTML = (self.isPaused ? '▶ ' + _('Resume Refresh') : '⏸ ' + _('Pause Refresh')); this.className = self.isPaused ? 'btn cbi-button cbi-button-positive' : 'btn cbi-button cbi-button-neutral'; });
             if (scrollUpButton) scrollUpButton.addEventListener('click', function () { var logText = document.getElementById('log_textarea'); if (logText) logText.scrollTop = 0; });
-            if (scrollDownButton) scrollDownButton.addEventListener('click', function () { var logText = document.getElementById('log_textarea'); if (logText) logText.scrollTop = logText.scrollHeight; });
+            if (scrollDownButton) scrollDownButton.addEventListener('click', function () { var logText = document.getElementById('log_textarea'); if (logText) logText.scrollHeight ? logText.scrollTop = logText.scrollHeight : null; });
             if (clearLogButton) clearLogButton.addEventListener('click', function () { self.clearLog(); });
         }, 0);
         self.refreshLog();
