@@ -45,7 +45,7 @@ return view.extend({
         if (!logText) return;
         var pre = E('pre');
         pre.innerHTML = '<div style="text-align:center;color:#888;padding:20px;">' + 
-                      _('服务已停止，无日志输出') + 
+                      _('暂无日志输出') + 
                       '</div>';
         dom.content(logText, pre);
     },
