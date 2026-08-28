@@ -44,7 +44,9 @@ return view.extend({
         var logText = document.getElementById('log_textarea');
         if (!logText) return;
         var pre = E('pre');
-        pre.innerHTML = '';
+        pre.innerHTML = '<div style="text-align:center;color:#888;padding:20px;">' + 
+                      _('服务已停止，无日志输出') + 
+                      '</div>';
         dom.content(logText, pre);
     },
 
@@ -164,7 +166,7 @@ return view.extend({
     render: function () {
         var self = this;
         var css = E('style', {}, '\
-            #log_textarea{text-align:left;max-height:70vh;overflow-y:auto;color-scheme:light dark;background-color:#f8f9fa;border-radius:8px;border:1px solid #ddd;font-size:13px;box-shadow:0 2px 5px rgba(0,0,0,0.05)} \
+            #log_textarea{text-align:left;max-height:70vh;min-height:200px;overflow-y:auto;color-scheme:light dark;background-color:#f8f9fa;border-radius:8px;border:1px solid #ddd;font-size:13px;box-shadow:0 2px 5px rgba(0,0,0,0.05)} \
             #log_textarea pre{padding:.7rem;word-break:break-all;margin:0;font-family:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;line-height:1.4} \
             .log-info{color:#0366d6}.log-warn{color:#f59f00}.log-error{color:#d73a49;font-weight:bold}.log-debug{color:#6f42c1}.log-ip{color:#22863a;font-weight:bold} \
             .log-container{padding:2px 0}.log-container:hover{background-color:rgba(0,0,0,0.03)} \
@@ -203,7 +205,7 @@ return view.extend({
             if (clearFilterButton) clearFilterButton.addEventListener('click', function () { if (filterInput) filterInput.value = ''; self.applyFilter(''); self.logEntriesCache = null; });
             if (refreshToggleButton) refreshToggleButton.addEventListener('click', function () { self.isPaused = !self.isPaused; this.innerHTML = (self.isPaused ? '▶ ' + _('Resume Refresh') : '⏸ ' + _('Pause Refresh')); this.className = self.isPaused ? 'btn cbi-button cbi-button-positive' : 'btn cbi-button cbi-button-neutral'; });
             if (scrollUpButton) scrollUpButton.addEventListener('click', function () { var logText = document.getElementById('log_textarea'); if (logText) logText.scrollTop = 0; });
-            if (scrollDownButton) scrollDownButton.addEventListener('click', function () { var logText = document.getElementById('log_textarea'); if (logText) logText.scrollHeight ? logText.scrollTop = logText.scrollHeight : null; });
+            if (scrollDownButton) scrollDownButton.addEventListener('click', function () { var logText = document.getElementById('log_textarea'); if (logText) logText.scrollTop = logText.scrollHeight; });
             if (clearLogButton) clearLogButton.addEventListener('click', function () { self.clearLog(); });
         }, 0);
         self.refreshLog();
