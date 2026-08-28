@@ -5,7 +5,7 @@ START=96
 STOP=10
 
 EXTRA_COMMANDS="hot_reload"
-EXTRA_HELP="        hot_reload  Hot-reload service"
+EXTRA_HELP="        hot_reload  Reload service (forces a clean restart; upstream honk reload logic is not yet reviewed)"
 
 CONF="honk"
 PROG="/usr/bin/honk-core"
@@ -97,9 +97,17 @@ start_service() {
 
     config_load "$CONF"
     config_get_bool enabled "config" "enabled" "0"
-    [ "$enabled" -eq "1" ] || return 1
+    logger -t honk "start_service: enabled=$enabled"
 
-    [ -x "$PROG" ] || return 1
+    [ "$enabled" -eq "1" ] || {
+        logger -t honk "start_service: disabled, not starting"
+        return 1
+    }
+
+    [ -x "$PROG" ] || {
+        logger -t honk "start_service: $PROG not found or not executable"
+        return 1
+    }
 
     config_get config_file "config" "config_file" "/etc/honk/config.dae"
 
@@ -109,7 +117,9 @@ start_service() {
     cleanup_netns
     hijack_resolv_conf
 
+    local tz_value
     tz_value="$(cat /etc/TZ 2>/dev/null)"
+
     procd_open_instance "$CONF"
     [ -n "$tz_value" ] && procd_set_param env TZ="$tz_value"
     procd_set_param env DAE_LOCATION_ASSET="/usr/share/v2ray"
@@ -122,9 +132,12 @@ start_service() {
     procd_set_param stdout 1
     procd_set_param stderr 1
     procd_close_instance
+
+    logger -t honk "start_service: honk-core launched"
 }
 
 service_stopped() {
+    logger -t honk "service_stopped: cleaning up"
     update_cron "remove"
     restore_resolv_conf
     cleanup_netns
@@ -141,10 +154,10 @@ service_triggers() {
 hot_reload() {
     set_chmod_640
     if /etc/init.d/honk running; then
-        logger -t honk "hot reload"
-        "$PROG" reload
+        logger -t honk "hot_reload: upstream honk-core reload path is unreviewed and may leak eBPF/nftables resources; performing full restart instead"
+        restart
     else
-        logger -t honk "not running, start"
+        logger -t honk "hot_reload: service not running, starting"
         start
     fi
 }
