@@ -29,6 +29,8 @@ return view.extend({
     originalLogContent: '',
     logEntriesCache: null,
     debounceTimer: null,
+    lastLogRawContent: null,
+    maxDisplayLines: 5000,
 
     isServiceRunning: function () {
         return L.resolveDefault(callServiceList('honk'), {}).then(function (svc) {
@@ -115,19 +117,40 @@ return view.extend({
     },
 
     renderLog: function (content) {
-        var lines = (content || '').trim() ? content.trim().split(/\r?\n/) : [];
+        content = content || '';
+
+        // Avoid rebuilding the DOM when the log file has not changed.
+        if (this.lastLogRawContent === content)
+            return;
+
+        this.lastLogRawContent = content;
+
+        var lines = content.trim() ? content.trim().split(/\r?\n/) : [];
+
+        // Keep the web page responsive when the log file becomes very large.
+        // The log file itself is never modified; only the displayed lines are limited.
+        if (lines.length > this.maxDisplayLines)
+            lines = lines.slice(-this.maxDisplayLines);
+
         lines.reverse();
+
         var formatted = [];
-        for (var i = 0; i < lines.length; i++) formatted.push(this.formatLogLine(lines[i]));
+        for (var i = 0; i < lines.length; i++)
+            formatted.push(this.formatLogLine(lines[i]));
+
         this.originalLogContent = formatted.join('');
         this.logEntriesCache = null;
+
         var logText = document.getElementById('log_textarea');
         if (!logText) return;
+
         var pre = E('pre');
         pre.innerHTML = this.originalLogContent || '';
         dom.content(logText, pre);
+
         var filterInput = document.getElementById('filterInput');
-        if (filterInput && filterInput.value) this.applyFilter(filterInput.value);
+        if (filterInput && filterInput.value)
+            this.applyFilter(filterInput.value);
     },
 
     refreshLog: function () {
@@ -138,6 +161,7 @@ return view.extend({
             if (!running) {
                 self.originalLogContent = '';
                 self.logEntriesCache = null;
+                self.lastLogRawContent = null;
                 self.renderBlank();
                 return;
             }
@@ -158,6 +182,7 @@ return view.extend({
         return callFileWrite(LOG_PATH, '').then(function () {
             self.originalLogContent = '';
             self.logEntriesCache = null;
+            self.lastLogRawContent = null;
             var logText = document.getElementById('log_textarea');
             if (logText) dom.content(logText, E('pre', {}, ''));
         });
@@ -191,7 +216,7 @@ return view.extend({
             ]),
             E('div', { 'class': 'cbi-section' }, [
                 E('div', { 'id': 'log_textarea' }, E('pre', {}, '')),
-                E('div', { 'style': 'text-align:right;margin-top:5px' }, E('small', {}, _('Refresh every 2 seconds.')))
+                E('div', { 'style': 'text-align:right;margin-top:5px' }, E('small', {}, _('Refresh every 5 seconds.')))
             ])
         ]);
         window.setTimeout(function () {
@@ -209,7 +234,7 @@ return view.extend({
             if (clearLogButton) clearLogButton.addEventListener('click', function () { self.clearLog(); });
         }, 0);
         self.refreshLog();
-        poll.add(function () { return self.refreshLog(); }, 2);
+        poll.add(function () { return self.refreshLog(); }, 5);
         return E('div', {}, [css, root]);
     }
 });
