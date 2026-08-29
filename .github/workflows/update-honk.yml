@@ -50,9 +50,8 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: master
 
-      - name: Trigger build packages
-        if: steps.commit.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh workflow run "Build packages" --ref master
+      #- name: Trigger build packages
+      #  env:
+      #    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+     #   run: |
+      #    gh workflow run "Build packages" --ref master
