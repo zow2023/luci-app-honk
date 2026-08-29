@@ -47,7 +47,7 @@ return view.extend({
         if (!logText) return;
         var pre = E('pre');
         pre.innerHTML = '<div style="text-align:center;color:#888;padding:20px;">' + 
-                      _('暂无日志输出') + 
+                      _('Log is empty.') + 
                       '</div>';
         dom.content(logText, pre);
     },
@@ -201,40 +201,79 @@ return view.extend({
             @media (prefers-color-scheme: dark){#log_textarea{background-color:#252a30;border-color:#444;color:#e6e6e6}.log-container:hover{background-color:rgba(255,255,255,0.05)}.filter-highlight{background-color:#b58b00;color:#fff}.log-info{color:#58a6ff}.log-warn{color:#ffab70}.log-error{color:#f97583}.log-debug{color:#d2a8ff}.log-ip{color:#7ee787}#filterInput{background-color:#252a30;border-color:#444;color:#e6e6e6}} \
             @media (min-width: 768px){.controls-container{flex-direction:row;flex-wrap:nowrap}.controls-row{margin-bottom:0;flex:1}.controls-row:first-child{flex:2}}'
         );
+
+        var filterInput = E('input', {
+            'id': 'filterInput',
+            'type': 'text',
+            'placeholder': _('Filter logs...'),
+            'input': self.debounce(function (ev) {
+                self.applyFilter(ev.target.value);
+            }, 200)
+        });
+
         var root = E('div', { 'class': 'cbi-map' }, [
             E('div', { 'class': 'controls-container' }, [
                 E('div', { 'class': 'controls-row' }, [
-                    E('input', { 'id': 'filterInput', 'type': 'text', 'placeholder': _('Filter logs...') }),
-                    E('button', { 'id': 'clearFilterButton', 'class': 'btn cbi-button cbi-button-neutral', 'type': 'button' }, _('Clear Filter')),
-                    E('button', { 'id': 'refreshToggleButton', 'class': 'btn cbi-button cbi-button-neutral', 'type': 'button' }, '⏸ ' + _('Pause Refresh'))
+                    filterInput,
+                    E('button', {
+                        'id': 'clearFilterButton',
+                        'class': 'btn cbi-button cbi-button-neutral',
+                        'type': 'button',
+                        'click': function () {
+                            filterInput.value = '';
+                            self.applyFilter('');
+                            self.logEntriesCache = null;
+                        }
+                    }, _('Clear Filter')),
+                    E('button', {
+                        'id': 'refreshToggleButton',
+                        'class': 'btn cbi-button cbi-button-neutral',
+                        'type': 'button',
+                        'click': function (ev) {
+                            self.isPaused = !self.isPaused;
+                            ev.target.innerHTML = (self.isPaused ? '▶ ' + _('Resume Refresh') : '⏸ ' + _('Pause Refresh'));
+                            ev.target.className = self.isPaused ? 'btn cbi-button cbi-button-positive' : 'btn cbi-button cbi-button-neutral';
+                        }
+                    }, '⏸ ' + _('Pause Refresh'))
                 ]),
                 E('div', { 'class': 'controls-row' }, [
-                    E('button', { 'id': 'scrollUpButton', 'class': 'btn cbi-button cbi-button-neutral', 'type': 'button' }, _('Scroll to head')),
-                    E('button', { 'id': 'scrollDownButton', 'class': 'btn cbi-button cbi-button-neutral', 'type': 'button' }, _('Scroll to tail')),
-                    E('button', { 'id': 'clearLogButton', 'class': 'btn cbi-button cbi-button-negative', 'type': 'button' }, _('Clear Log'))
+                    E('button', {
+                        'id': 'scrollUpButton',
+                        'class': 'btn cbi-button cbi-button-neutral',
+                        'type': 'button',
+                        'click': function () {
+                            var logText = document.getElementById('log_textarea');
+                            if (logText) logText.scrollTop = 0;
+                        }
+                    }, _('Scroll to head')),
+                    E('button', {
+                        'id': 'scrollDownButton',
+                        'class': 'btn cbi-button cbi-button-neutral',
+                        'type': 'button',
+                        'click': function () {
+                            var logText = document.getElementById('log_textarea');
+                            if (logText) logText.scrollTop = logText.scrollHeight;
+                        }
+                    }, _('Scroll to tail')),
+                    E('button', {
+                        'id': 'clearLogButton',
+                        'class': 'btn cbi-button cbi-button-negative',
+                        'type': 'button',
+                        'click': function () {
+                            self.clearLog();
+                        }
+                    }, _('Clear Log'))
                 ])
             ]),
             E('div', { 'class': 'cbi-section' }, [
                 E('div', { 'id': 'log_textarea' }, E('pre', {}, '')),
-                E('div', { 'style': 'text-align:right;margin-top:5px' }, E('small', {}, _('Refresh every 5 seconds.')))
+                E('div', { 'style': 'text-align:right;margin-top:5px' }, E('small', {}, _('Refresh every 2 seconds.')))
             ])
         ]);
-        window.setTimeout(function () {
-            var filterInput = document.getElementById('filterInput');
-            var clearFilterButton = document.getElementById('clearFilterButton');
-            var refreshToggleButton = document.getElementById('refreshToggleButton');
-            var scrollUpButton = document.getElementById('scrollUpButton');
-            var scrollDownButton = document.getElementById('scrollDownButton');
-            var clearLogButton = document.getElementById('clearLogButton');
-            if (filterInput) filterInput.addEventListener('input', self.debounce(function () { self.applyFilter(this.value); }, 200));
-            if (clearFilterButton) clearFilterButton.addEventListener('click', function () { if (filterInput) filterInput.value = ''; self.applyFilter(''); self.logEntriesCache = null; });
-            if (refreshToggleButton) refreshToggleButton.addEventListener('click', function () { self.isPaused = !self.isPaused; this.innerHTML = (self.isPaused ? '▶ ' + _('Resume Refresh') : '⏸ ' + _('Pause Refresh')); this.className = self.isPaused ? 'btn cbi-button cbi-button-positive' : 'btn cbi-button cbi-button-neutral'; });
-            if (scrollUpButton) scrollUpButton.addEventListener('click', function () { var logText = document.getElementById('log_textarea'); if (logText) logText.scrollTop = 0; });
-            if (scrollDownButton) scrollDownButton.addEventListener('click', function () { var logText = document.getElementById('log_textarea'); if (logText) logText.scrollTop = logText.scrollHeight; });
-            if (clearLogButton) clearLogButton.addEventListener('click', function () { self.clearLog(); });
-        }, 0);
+
         self.refreshLog();
-        poll.add(function () { return self.refreshLog(); }, 5);
+        poll.add(function () { return self.refreshLog(); }, 2);
+
         return E('div', {}, [css, root]);
     }
 });
