@@ -94,9 +94,7 @@ return view.extend({
         }).catch(function (err) {
             ui.addNotification(
                 null,
-                E('p', _('Failed to load CodeMirror resources: %s').format(
-                    err.message || err
-                )),
+                E('p', _('Failed to load CodeMirror resources: %s').format(err && err.message || err)),
                 'error'
             );
         });
@@ -104,85 +102,21 @@ return view.extend({
 
     formatCode: function () {
         var editor = this.editorInstance;
-
         if (!editor)
             return;
-
-        function formatLine(line) {
-            var result = '';
-            var quote = null;
-            var escaped = false;
-            var i = 0;
-
-            while (i < line.length) {
-                var ch = line[i];
-
-                if (quote) {
-                    result += ch;
-
-                    if (escaped) {
-                        escaped = false;
-                    } else if (ch === '\\') {
-                        escaped = true;
-                    } else if (ch === quote) {
-                        quote = null;
-                    }
-
-                    i++;
-                    continue;
-                }
-
-                if (ch === '"' || ch === "'") {
-                    quote = ch;
-                    result += ch;
-                    i++;
-                    continue;
-                }
-
-                if (ch === '#') {
-                    result += line.slice(i);
-                    break;
-                }
-
-                if (ch === '-' && line[i + 1] === '>') {
-                    result = result.replace(/\s+$/, '');
-                    result += ' -> ';
-                    i += 2;
-
-                    while (i < line.length && /\s/.test(line[i]))
-                        i++;
-
-                    continue;
-                }
-
-                if (ch === '&' && line[i + 1] === '&') {
-                    result = result.replace(/\s+$/, '');
-                    result += ' && ';
-                    i += 2;
-
-                    while (i < line.length && /\s/.test(line[i]))
-                        i++;
-
-                    continue;
-                }
-
-                result += ch;
-                i++;
-            }
-
-            return result.replace(/\s+$/, '');
-        }
 
         editor.operation(function () {
             var cursor = editor.getCursor();
             var lines = editor.getValue().split('\n');
 
             var formatted = lines.map(function (line) {
-                if (line.trim().indexOf('#') === 0 ||
-                    line.trim().indexOf('//') === 0)
+                if (line.trim().indexOf('#') === 0 || line.trim().indexOf('//') === 0)
                     return line;
 
-                return formatLine(line);
+                line = line.replace(/\s*->\s*/g, ' -> ');
+                line = line.replace(/\s*&&\s*/g, ' && ');
+
+                return line.replace(/\s+$/, '');
             });
 
             editor.setValue(formatted.join('\n'));
@@ -201,22 +135,13 @@ return view.extend({
     },
 
     execServiceAction: function (action) {
-        return new Promise(function (resolve, reject) {
-            var done = false;
-            var settle = function (err, res) {
-                if (done) return;
-                done = true;
-                if (err) reject(err); else resolve(res);
-            };
-            fs.exec('/etc/init.d/honk', [action]).then(function (res) {
-                if (res && typeof res.code !== 'undefined' && res.code !== 0)
-                    settle(new Error((res.stderr || res.stdout || (action + ' failed')).trim()));
-                else
-                    settle(null, res);
-            }, function (err) { settle(err); });
-            window.setTimeout(function () {
-                settle(null, { code: 0, stdout: 'dispatched', stderr: '' });
-            }, 28000);
+        return fs.exec('/etc/init.d/honk', [action]).then(function (res) {
+            if (res && typeof res.code !== 'undefined' && res.code !== 0)
+                return Promise.reject(new Error(
+                    (res.stderr || res.stdout || (action + ' failed')).trim()
+                ));
+
+            return res;
         });
     },
 
@@ -224,11 +149,11 @@ return view.extend({
         var self = this;
 
         ui.showModal(_('Reloading...'), [
-            E('p', { 'class': 'spinning' },
-                _('Reloading service configuration...'))
+            E('p', { 'class': 'spinning' }, _('Reloading service configuration...'))
         ]);
 
-        return self.execServiceAction('reload').then(function () {
+        // ★ 关键改动：'reload' → 'hot_reload'
+        return self.execServiceAction('hot_reload').then(function () {
             ui.hideModal();
             ui.addNotification(
                 null,
@@ -259,20 +184,22 @@ return view.extend({
         }
 
         return fs.write(CONFIG_PATH, content).then(function () {
-            if (applyChanges)
-                return self.handleReloadService();
+            if (!applyChanges) {
+                ui.addNotification(
+                    null,
+                    E('p', _('Configuration saved.')),
+                    'info'
+                );
+                return null;
+            }
 
-            ui.addNotification(
-                null,
-                E('p', _('Configuration saved.')),
-                'info'
-            );
+            return uci.apply().then(function () {
+                return self.handleReloadService();
+            });
         }).catch(function (err) {
             ui.addNotification(
                 null,
-                E('p', _('Failed to save configuration: %s').format(
-                    err.message || err
-                )),
+                E('p', _('Failed to save configuration: %s').format(err.message || err)),
                 'error'
             );
             throw err;
@@ -291,24 +218,25 @@ return view.extend({
         window.location.reload();
     },
 
-    render: function (content) {
+    render: function (data) {
         var self = this;
+        var content = data || '';
 
         var css = E('style', {}, '\
-            .honk-editor-page{max-width:1000px}\
-            .honk-editor-page .hint{margin:0 0 16px;color:var(--text-color-secondary,#666)}\
-            .honk-card{margin-bottom:18px;padding:18px;border:1px solid var(--border-color-medium,#d9d9d9);border-radius:12px;background:var(--background-color-primary,#fff)}\
-            .honk-card h3{margin:0 0 12px;font-size:18px}\
-            .honk-toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px}\
-            .CodeMirror{border:1px solid #6272a4;border-radius:8px;min-height:480px;font-family:Monaco,Consolas,monospace !important;font-size:13px !important;line-height:1.5 !important}\
+            .honk-editor-page{max-width:1000px} \
+            .honk-editor-page .hint{margin:0 0 16px;color:var(--text-color-secondary,#666)} \
+            .honk-card{margin-bottom:18px;padding:18px;border:1px solid var(--border-color-medium,#d9d9d9);border-radius:12px;background:var(--background-color-primary,#fff)} \
+            .honk-card h3{margin:0 0 12px;font-size:18px} \
+            .honk-toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px} \
+            .CodeMirror{border:1px solid #6272a4;border-radius:8px;min-height:480px;font-family:Monaco,Consolas,monospace !important;font-size:13px !important;line-height:1.5 !important} \
             .CodeMirror pre.CodeMirror-line,.CodeMirror pre.CodeMirror-line-like,.CodeMirror-lines,.CodeMirror-line,.CodeMirror-code{font-family:Monaco,Consolas,monospace !important;font-size:13px !important;line-height:1.5 !important;letter-spacing:0 !important}'
         );
 
         var root = E('div', { 'class': 'honk-editor-page' }, [
             E('h2', {}, _('DNS Settings')),
-            E('p', { 'class': 'hint' },
-                _('Configure DNS settings for HONK.')),
+            E('p', { 'class': 'hint' }, _('Configure DNS settings for HONK.')),
             E('div', { 'class': 'honk-card' }, [
+                E('h3', {}, _('DNS Configuration')),
                 E('div', { 'class': 'honk-toolbar' }, [
                     E(
                         'button',
@@ -333,7 +261,6 @@ return view.extend({
                         _('Reload Service')
                     )
                 ]),
-                E('h3', {}, _('DNS Configuration')),
                 E(
                     'textarea',
                     {
