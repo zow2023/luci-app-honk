@@ -1,11 +1,26 @@
 msgid ""
 msgstr ""
-"Content-Type: text/plain; charset=UTF-8\n"
 "Project-Id-Version: luci-app-honk\n"
-"Language-Team: none\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2026-08-30 18:00+0900\n"
+"PO-Revision-Date: 2026-08-30 18:00+0900\n"
+"Last-Translator: \n"
+"Language-Team: Chinese (Simplified) <zh-cn@li.org>\n"
 "Language: zh_Hans\n"
 "MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+# status.js
+msgid "Failed to update autostart: %s"
+msgstr "更新自启动状态失败：%s"
+
+msgid "View Log"
+msgstr "查看日志"
+
+msgid "Service action failed: %s"
+msgstr "服务操作失败：%s"
 
 msgid "RUNNING"
 msgstr "运行中"
@@ -14,103 +29,25 @@ msgid "NOT RUNNING"
 msgstr "未运行"
 
 msgid "Collecting data..."
-msgstr "收集数据..."
+msgstr "正在获取数据..."
 
-msgid "Enabled"
-msgstr "启用"
-
-msgid "Reload Service"
-msgstr "重载服务"
-
-msgid "Reload service to apply configuration."
-msgstr "重载服务以使配置生效。"
-
-msgid "Global Settings"
-msgstr "全局设置"
-
-msgid "DNS Settings"
-msgstr "DNS 设置"
-
-msgid "Node Settings"
-msgstr "节点设置"
-
-msgid "Routing Settings"
-msgstr "路由设置"
-
-msgid "Global Configuration"
-msgstr "全局配置"
-
-msgid "DNS Configuration"
-msgstr "DNS 配置"
-
-msgid "Node Configuration"
-msgstr "节点配置"
-
-msgid "Route Configuration"
-msgstr "路由配置"
-
-msgid "Configure global settings for HONK."
-msgstr "调整 HONK 的全局设置。"
-
-msgid "Configure DNS settings for HONK."
-msgstr "调整 HONK 的 DNS 设置。"
-
-msgid "Configure nodes and groups for HONK."
-msgstr "调整 HONK 的节点与分组设置。"
-
-msgid "Configure routing rules for HONK."
-msgstr "调整 HONK 的路由规则。"
-
-msgid "Correctly configure the include field for separate-config to work, or enter complete configuration here."
-msgstr "请正确配置 include 字段以启用拆分配置，或在此处填写完整配置。"
-
-msgid "Logs"
-msgstr "日志"
+msgid "eBPF-based Linux high-performance transparent proxy solution."
+msgstr "基于 eBPF 的 Linux 高性能透明代理解决方案。"
 
 msgid "Memory Usage"
 msgstr "内存占用"
-
-msgid "Enable Auto Subscribe Update"
-msgstr "启用订阅自动更新"
-
-msgid "Update Cycle"
-msgstr "更新周期"
-
-msgid "Update Time (Every Day)"
-msgstr "更新时间（每天）"
-
-msgid "Format Code"
-msgstr "格式化代码"
-
-msgid "Control"
-msgstr "控制"
-
-msgid "Configuration"
-msgstr "配置"
-
-msgid "Log"
-msgstr "日志"
-
-msgid "Loading..."
-msgstr "加载中..."
-
-msgid "eBPF-based Linux high-performance transparent proxy solution (HONK engine)."
-msgstr "基于 Rust eBPF 的高性能透明代理解决方案 (honk 引擎)。"
 
 msgid "Uptime"
 msgstr "运行时间"
 
 msgid "Engine Version"
-msgstr "引擎版本"
+msgstr "内核版本"
 
 msgid "Service"
 msgstr "服务"
 
 msgid "Autostart"
-msgstr "开机自启"
-
-msgid "Status Control"
-msgstr "状态控制"
+msgstr "自动启动"
 
 msgid "Start"
 msgstr "启动"
@@ -121,17 +58,30 @@ msgstr "重启"
 msgid "Stop"
 msgstr "停止"
 
-msgid "Dashboard"
-msgstr "面板"
+msgid "Proxy Traffic Stats"
+msgstr "代理流量统计"
 
-msgid "Operation failed, please check logs"
-msgstr "操作失败，请查看日志"
+msgid "Real-time Rate (TX/RX)"
+msgstr "实时速率 (发送/接收)"
+
+msgid "Total Traffic (TX/RX)"
+msgstr "总流量 (发送/接收)"
+
+# global.js
+msgid "Reloading..."
+msgstr "正在重新加载..."
+
+msgid "Reloading service configuration..."
+msgstr "正在重新加载服务配置..."
+
+msgid "Service reloaded successfully."
+msgstr "服务已成功重新加载。"
+
+msgid "Reload failed: %s"
+msgstr "重新加载失败：%s"
 
 msgid "Configuration cannot be empty!"
 msgstr "配置不能为空！"
-
-msgid "Configuration saved and applied."
-msgstr "配置已保存并应用。"
 
 msgid "Configuration saved."
 msgstr "配置已保存。"
@@ -139,77 +89,96 @@ msgstr "配置已保存。"
 msgid "Failed to save configuration: %s"
 msgstr "保存配置失败：%s"
 
-msgid "Failed to update autostart: %s"
-msgstr "更新开机自启失败：%s"
+msgid "Global Settings"
+msgstr "全局设置"
 
-msgid "Service action failed: %s"
-msgstr "服务操作失败：%s"
+msgid "Configure global settings for HONK."
+msgstr "配置 HONK 的全局参数。"
 
-msgid "Please enable \"Autostart\" before clicking Start."
-msgstr "请先打开\"开机自启\"开关，再点击启动。"
+msgid "Global Configuration"
+msgstr "全局配置"
 
-msgid "View Logs"
-msgstr "查看日志"
+msgid "Correctly configure the include field for separate-config to work, or enter complete configuration here."
+msgstr "请正确配置 include 字段以使独立配置文件生效，或在此处输入完整配置。"
+
+msgid "Format Code"
+msgstr "格式化代码"
+
+msgid "Reload Service"
+msgstr "重载服务"
+
+# dns.js
+msgid "DNS Settings"
+msgstr "DNS 设置"
+
+msgid "Configure DNS settings for HONK."
+msgstr "配置 HONK 的 DNS 设置。"
+
+msgid "DNS Configuration"
+msgstr "DNS 配置"
+
+# route.js
+msgid "Routing Settings"
+msgstr "路由设置"
+
+msgid "Configure routing rules for HONK."
+msgstr "配置 HONK 的路由规则。"
+
+msgid "Route Configuration"
+msgstr "路由配置"
+
+# node.js
+msgid "Node Settings"
+msgstr "节点设置"
+
+msgid "Configure nodes and groups for HONK."
+msgstr "配置 HONK 的节点与节点组。"
+
+msgid "Node Configuration"
+msgstr "节点配置"
+
+msgid "Failed to load CodeMirror resources."
+msgstr "加载 CodeMirror 资源失败。"
 
 msgid "Failed to load CodeMirror resources: %s"
 msgstr "加载 CodeMirror 资源失败：%s"
 
-msgid "Every Day"
-msgstr "每天"
+# log.js
+msgid "Log is empty."
+msgstr "日志内容为空。"
 
-msgid "Every Monday"
-msgstr "每周一"
+msgid "Unknown error: %s"
+msgstr "未知错误：%s"
 
-msgid "Every Tuesday"
-msgstr "每周二"
-
-msgid "Every Wednesday"
-msgstr "每周三"
-
-msgid "Every Thursday"
-msgstr "每周四"
-
-msgid "Every Friday"
-msgstr "每周五"
-
-msgid "Every Saturday"
-msgstr "每周六"
-
-msgid "Every Sunday"
-msgstr "每周日"
+msgid "Are you sure you want to clear the log file?"
+msgstr "确定要清空日志文件吗？"
 
 msgid "Filter logs..."
-msgstr "筛选日志..."
+msgstr "过滤日志..."
 
 msgid "Clear Filter"
-msgstr "清除筛选"
-
-msgid "Pause Refresh"
-msgstr "暂停刷新"
+msgstr "清除过滤"
 
 msgid "Resume Refresh"
 msgstr "恢复刷新"
+
+msgid "Pause Refresh"
+msgstr "暂停刷新"
 
 msgid "Scroll to head"
 msgstr "滚动到顶部"
 
 msgid "Scroll to tail"
-msgstr "滚动到末尾"
+msgstr "滚动到底部"
 
 msgid "Clear Log"
 msgstr "清空日志"
 
-msgid "Refresh every %s seconds."
-msgstr "每 %s 秒刷新一次。"
+msgid "Refresh every 5 seconds."
+msgstr "每 5 秒刷新一次。"
 
-msgid "Are you sure you want to clear the log file?"
-msgstr "确定要清空日志文件吗？"
+msgid "Log cleared successfully."
+msgstr "日志已成功清空。"
 
-msgid "Log is empty."
-msgstr "日志为空。"
-
-msgid "Log file does not exist."
-msgstr "日志文件不存在。"
-
-msgid "Unknown error: %s"
-msgstr "未知错误：%s"
+msgid "Failed to clear log: %s"
+msgstr "清空日志失败：%s"
