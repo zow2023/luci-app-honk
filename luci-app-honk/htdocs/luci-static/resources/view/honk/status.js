@@ -24,10 +24,15 @@ var callHonkStats = rpc.declare({
 
 function getInstanceInfo(serviceData) {
     try {
-        var instance = serviceData.honk.instances.honk;
+        var instances = serviceData.honk.instances;
+        if (!instances) return { running: false, pid: null };
+        
+        var instanceKey = instances.honk ? 'honk' : Object.keys(instances)[0];
+        var instance = instances[instanceKey];
+        
         return {
-            running: !!instance.running,
-            pid: instance.pid || null
+            running: !!(instance && instance.running),
+            pid: (instance && instance.pid) ? instance.pid : null
         };
     } catch (e) {
         return { running: false, pid: null };
@@ -36,20 +41,14 @@ function getInstanceInfo(serviceData) {
 
 function parseVersion(execResult) {
     var text = '';
-
-    if (typeof execResult === 'string')
-        text = execResult;
-    else if (execResult && typeof execResult.stdout === 'string')
-        text = execResult.stdout;
+    if (typeof execResult === 'string') text = execResult;
+    else if (execResult && typeof execResult.stdout === 'string') text = execResult.stdout;
 
     text = (text || '').trim();
-    if (!text)
-        return '--';
+    if (!text) return '--';
 
-    // 匹配 "honk-core 0.0.1-alpha" 或 "version 0.0.1" 等输出
     var match = text.match(/honk(?:-core)?\s+v?([^\s]+)/i) || text.match(/version\s+v?([^\s]+)/i);
-    if (match && match[1])
-        return match[1];
+    if (match && match[1]) return match[1];
 
     var firstLine = text.split('\n')[0].trim();
     return firstLine || '--';
@@ -84,9 +83,7 @@ return view.extend({
     },
 
     getMemoryUsage: function (pid) {
-        if (!pid)
-            return Promise.resolve('--');
-
+        if (!pid) return Promise.resolve('--');
         return L.resolveDefault(fs.read_direct('/proc/' + pid + '/status', 'text'), '').then(function (status) {
             var match = (status || '').match(/VmRSS:\s+(\d+)\s+kB/);
             return match ? (parseInt(match[1], 10) / 1024).toFixed(1) + ' MB' : '--';
@@ -94,9 +91,7 @@ return view.extend({
     },
 
     getUptime: function (pid) {
-        if (!pid)
-            return Promise.resolve('--');
-
+        if (!pid) return Promise.resolve('--');
         return Promise.all([
             L.resolveDefault(fs.read_direct('/proc/uptime', 'text'), ''),
             L.resolveDefault(fs.read_direct('/proc/' + pid + '/stat', 'text'), '')
@@ -104,23 +99,19 @@ return view.extend({
             var systemUptime = parseFloat((results[0] || '').split(' ')[0]);
             var statParts = (results[1] || '').trim().split(/\s+/);
 
-            if (!systemUptime || statParts.length < 22)
-                return '--';
+            if (!systemUptime || statParts.length < 22) return '--';
 
             var startTimeJiffies = parseFloat(statParts[21]);
             var processUptime = systemUptime - (startTimeJiffies / 100);
 
-            if (isNaN(processUptime) || processUptime < 0)
-                return '--';
+            if (isNaN(processUptime) || processUptime < 0) return '--';
 
             var hours = Math.floor(processUptime / 3600);
             var minutes = Math.floor((processUptime % 3600) / 60);
             var seconds = Math.floor(processUptime % 60);
 
-            if (hours > 0)
-                return hours + 'h ' + minutes + 'm ' + seconds + 's';
-            if (minutes > 0)
-                return minutes + 'm ' + seconds + 's';
+            if (hours > 0) return hours + 'h ' + minutes + 'm ' + seconds + 's';
+            if (minutes > 0) return minutes + 'm ' + seconds + 's';
             return seconds + 's';
         });
     },
@@ -141,8 +132,7 @@ return view.extend({
         return L.resolveDefault(fs.read_direct('/etc/honk/config.dae', 'text'), '').then(function (raw) {
             var list = ['eth0', 'eth1', 'wan', 'br-wan'];
             var m = (raw || '').match(/^\s*wan_interface\s*:\s*([^\s]+)/m);
-            if (m && m[1] && m[1] !== 'auto')
-                list.unshift(m[1]);
+            if (m && m[1] && m[1] !== 'auto') list.unshift(m[1]);
             self.wanInterfaces = list;
             return list;
         });
@@ -158,7 +148,6 @@ return view.extend({
 
     setAutostart: function (enabled) {
         var self = this;
-
         uci.set('honk', 'config', 'enabled', enabled ? '1' : '0');
 
         return uci.save().then(function () {
@@ -176,20 +165,12 @@ return view.extend({
 
     handleAction: function (action) {
         var self = this;
-
-        if (action === 'start' && !self.serviceEnabled) {
-            ui.addNotification(null,
-                E('p', _('请先打开"开机自启"开关，再点击 启动。')),
-                'warning');
-            return Promise.resolve();
-        }
-
         return self.execService(action).then(function () {
             return self.updateDashboard();
         }).catch(function (err) {
-            var link = E('a', { href: L.url('admin/services/honk/log') }, _('查看日志'));
+            var link = E('a', { href: L.url('admin/services/honk/log') }, _('View Log'));
             ui.addNotification(null,
-                E('p', _('服务操作失败：%s').format(err.message || err), link),
+                E('p', _('Service action failed: %s').format(err.message || err), link),
                 'error');
             throw err;
         });
@@ -197,7 +178,6 @@ return view.extend({
 
     updateDashboard: function () {
         var self = this;
-
         var trafficPromise = self.getTrafficStats().catch(function () {
             return { rx: 0, tx: 0 };
         });
@@ -232,14 +212,10 @@ return view.extend({
                     badge.style.color = instanceInfo.running ? '#65d875' : '#ed6a63';
                 }
 
-                if (memory)
-                    memory.textContent = instanceInfo.running ? metrics[0] : '--';
-                if (uptime)
-                    uptime.textContent = instanceInfo.running ? metrics[1] : '--';
-                if (versionEl)
-                    versionEl.textContent = version;
-                if (autostartEl)
-                    autostartEl.className = 'honk-switch' + (autostart ? ' on' : '');
+                if (memory) memory.textContent = instanceInfo.running ? metrics[0] : '--';
+                if (uptime) uptime.textContent = instanceInfo.running ? metrics[1] : '--';
+                if (versionEl) versionEl.textContent = version;
+                if (autostartEl) autostartEl.className = 'honk-switch' + (autostart ? ' on' : '');
 
                 if (instanceInfo.running) {
                     var now = Date.now();
@@ -255,10 +231,8 @@ return view.extend({
                     self.lastTx = traffic.tx;
                     self.lastTime = now;
 
-                    if (rateEl)
-                        rateEl.textContent = self.formatBytes(txRate) + '/s ↑ / ' + self.formatBytes(rxRate) + '/s ↓';
-                    if (totalEl)
-                        totalEl.textContent = self.formatBytes(traffic.tx) + ' ↑ / ' + self.formatBytes(traffic.rx) + ' ↓';
+                    if (rateEl) rateEl.textContent = self.formatBytes(txRate) + '/s ↑ / ' + self.formatBytes(rxRate) + '/s ↓';
+                    if (totalEl) totalEl.textContent = self.formatBytes(traffic.tx) + ' ↑ / ' + self.formatBytes(traffic.rx) + ' ↓';
                 } else {
                     self.lastRx = 0;
                     self.lastTx = 0;
@@ -310,24 +284,24 @@ return view.extend({
                     _('Collecting data...')
                 ])
             ]),
-            E('p', { 'class': 'honk-description' }, _('基于 Rust eBPF 的高性能透明代理解决方案 (honk 引擎) 。')),
+            E('p', { 'class': 'honk-description' }, _('eBPF-based Linux high-performance transparent proxy solution.')),
             E('section', { 'class': 'honk-cards' }, [
                 E('div', { 'class': 'honk-card' }, [
                     E('div', { 'class': 'honk-label' }, _('Memory Usage')),
                     E('div', { 'id': 'honk_memory', 'class': 'honk-value' }, '--')
                 ]),
                 E('div', { 'class': 'honk-card' }, [
-                    E('div', { 'class': 'honk-label' }, _('运行时间')),
+                    E('div', { 'class': 'honk-label' }, _('Uptime')),
                     E('div', { 'id': 'honk_uptime', 'class': 'honk-value' }, '--')
                 ]),
                 E('div', { 'class': 'honk-card version' }, [
-                    E('div', { 'class': 'honk-label' }, _('引擎版本')),
+                    E('div', { 'class': 'honk-label' }, _('Engine Version')),
                     E('div', { 'id': 'honk_version', 'class': 'honk-value' }, version)
                 ])
             ]),
             E('div', { 'class': 'honk-bottom-row' }, [
                 E('section', { 'class': 'honk-section' }, [
-                    E('h2', {}, _('服务')),
+                    E('h2', {}, _('Service')),
                     E('div', { 'class': 'honk-service' }, [
                         E('button', {
                             'id': 'honk_autostart',
@@ -337,35 +311,35 @@ return view.extend({
                                 self.setAutostart(!self.serviceEnabled);
                             }
                         }),
-                        E('span', {}, _('开机自启'))
+                        E('span', {}, _('Autostart'))
                     ]),
                     E('div', { 'class': 'honk-actions' }, [
                         E('button', {
                             'class': 'btn cbi-button cbi-button-positive',
                             'type': 'button',
                             'click': function () { self.handleAction('start'); }
-                        }, _('启动')),
+                        }, _('Start')),
                         E('button', {
                             'class': 'btn cbi-button cbi-button-apply',
                             'type': 'button',
                             'click': function () { self.handleAction('restart'); }
-                        }, _('重启')),
+                        }, _('Restart')),
                         E('button', {
                             'class': 'btn cbi-button cbi-button-negative',
                             'type': 'button',
                             'click': function () { self.handleAction('stop'); }
-                        }, _('停止'))
+                        }, _('Stop'))
                     ])
                 ]),
                 E('section', { 'class': 'honk-section' }, [
-                    E('h2', {}, _('代理流量统计')),
+                    E('h2', {}, _('Proxy Traffic Stats')),
                     E('div', { 'class': 'honk-traffic-grid' }, [
                         E('div', { 'class': 'honk-traffic-item' }, [
-                            E('div', { 'class': 'honk-label' }, _('实时速率 (上/下)')),
+                            E('div', { 'class': 'honk-label' }, _('Real-time Rate (TX/RX)')),
                             E('div', { 'id': 'honk_traffic_rate', 'class': 'honk-subvalue' }, '0 B/s ↑ / 0 B/s ↓')
                         ]),
                         E('div', { 'class': 'honk-traffic-item' }, [
-                            E('div', { 'class': 'honk-label' }, _('累计流量 (发/收)')),
+                            E('div', { 'class': 'honk-label' }, _('Total Traffic (TX/RX)')),
                             E('div', { 'id': 'honk_traffic_total', 'class': 'honk-subvalue' }, '0 B ↑ / 0 B ↓')
                         ])
                     ])
