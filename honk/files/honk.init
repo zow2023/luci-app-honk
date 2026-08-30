@@ -23,6 +23,9 @@ LOG_MONITOR_PID="/var/run/honk_log_monitor.pid"
 
 RESOLV_HONK="/tmp/resolv.conf.honk"
 
+# 每个网络/DNS 步骤的硬上限，让任意一次 stop+start 都不会超过 rpcd 的 30s 上限。
+NET_STEP_TIMEOUT=3
+
 
 set_chmod_640() {
     mkdir -p /etc/honk/config.d
@@ -110,12 +113,12 @@ log_monitor() {
 
 
 cleanup_netns() {
-    ip netns del "$HONK_NETNS_NAME" 2>/dev/null || true
-    umount "$HONK_NETNS_PATH" 2>/dev/null || true
+    timeout "$NET_STEP_TIMEOUT" ip netns del "$HONK_NETNS_NAME" 2>/dev/null || true
+    timeout "$NET_STEP_TIMEOUT" umount "$HONK_NETNS_PATH" 2>/dev/null || true
     rm -f "$HONK_NETNS_PATH" 2>/dev/null || true
 
-    ip link del "$HONK_HOST_IFACE" 2>/dev/null || true
-    ip link del "$HONK_PEER_IFACE" 2>/dev/null || true
+    timeout "$NET_STEP_TIMEOUT" ip link del "$HONK_HOST_IFACE" 2>/dev/null || true
+    timeout "$NET_STEP_TIMEOUT" ip link del "$HONK_PEER_IFACE" 2>/dev/null || true
 }
 
 
@@ -158,14 +161,15 @@ hijack_resolv_conf() {
         echo "nameserver 223.5.5.5" >> "$RESOLV_HONK"
     fi
 
-    mount --bind "$RESOLV_HONK" /tmp/resolv.conf 2>/dev/null || true
-    mount -o remount,ro,bind /tmp/resolv.conf 2>/dev/null || true
+    # 单步 timeout 防护：bind mount / ro-remount 偶发挂死时不再无界等待。
+    timeout "$NET_STEP_TIMEOUT" mount --bind "$RESOLV_HONK" /tmp/resolv.conf 2>/dev/null || true
+    timeout "$NET_STEP_TIMEOUT" mount -o remount,ro,bind /tmp/resolv.conf 2>/dev/null || true
 }
 
 
 restore_resolv_conf() {
     if grep -q ' /tmp/resolv\.conf ' /proc/mounts; then
-        umount -l /tmp/resolv.conf 2>/dev/null || true
+        timeout "$NET_STEP_TIMEOUT" umount -l /tmp/resolv.conf 2>/dev/null || true
     fi
 
     rm -f "$RESOLV_HONK"
@@ -262,11 +266,21 @@ service_triggers() {
 hot_reload() {
     set_chmod_640
 
-    if /etc/init.d/honk running; then
-        logger -t honk "hot_reload: performing clean restart"
-        restart
-    else
-        logger -t honk "hot_reload: service not running, starting"
-        start
-    fi
+    # 把真正的 stop+start 推到后台子 shell，立刻返回 0。
+    # repcd file.exec 默认有 30s 硬超时；网络清理里任意一步
+    # 偶尔卡死时，前端 XHR 会先超时变成 "timed out"。
+    # detach 后 UI 永远即时收到 "重载服务" 成功的反馈。
+    (
+        if /etc/init.d/honk running 2>/dev/null; then
+            logger -t honk "hot_reload: performing clean restart"
+            /etc/init.d/honk stop   >/dev/null 2>&1
+            /etc/init.d/honk start  >/dev/null 2>&1
+        else
+            logger -t honk "hot_reload: service not running, starting"
+            /etc/init.d/honk start  >/dev/null 2>&1
+        fi
+    ) >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+
+    return 0
 }
