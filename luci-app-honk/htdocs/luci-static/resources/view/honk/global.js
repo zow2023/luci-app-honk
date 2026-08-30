@@ -126,22 +126,13 @@ return view.extend({
     },
 
     execServiceAction: function (action) {
-        return new Promise(function (resolve, reject) {
-            var done = false;
-            var settle = function (err, res) {
-                if (done) return;
-                done = true;
-                if (err) reject(err); else resolve(res);
-            };
-            fs.exec('/etc/init.d/honk', [action]).then(function (res) {
-                if (res && typeof res.code !== 'undefined' && res.code !== 0)
-                    settle(new Error((res.stderr || res.stdout || (action + ' failed')).trim()));
-                else
-                    settle(null, res);
-            }, function (err) { settle(err); });
-            window.setTimeout(function () {
-                settle(null, { code: 0, stdout: 'dispatched', stderr: '' });
-            }, 28000);
+        return fs.exec('/etc/init.d/honk', [action]).then(function (res) {
+            if (res && typeof res.code !== 'undefined' && res.code !== 0)
+                return Promise.reject(new Error(
+                    (res.stderr || res.stdout || (action + ' failed')).trim()
+                ));
+
+            return res;
         });
     },
 
@@ -152,7 +143,10 @@ return view.extend({
             E('p', { 'class': 'spinning' }, _('Reloading service configuration...'))
         ]);
 
-        return self.execServiceAction('reload').then(function () {
+        // ★ 关键改动：'reload' → 'hot_reload'
+        // 走新 init 的 hot_reload()，绕过 reload_service() 的 stop;start
+        // 阻塞路径，根除 XHR 30s 超时。
+        return self.execServiceAction('hot_reload').then(function () {
             ui.hideModal();
             ui.addNotification(
                 null,
