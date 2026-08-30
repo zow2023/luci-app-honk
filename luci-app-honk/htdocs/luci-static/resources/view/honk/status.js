@@ -296,7 +296,7 @@ return view.extend({
                     _('Collecting data...')
                 ])
             ]),
-            E('p', { 'class': 'honk-description' }, _('eBPF-based Linux high-performance transparent proxy solution.')),
+            E('p', { 'class': 'honk-description' }, _('eBPF-based Linux high-performance transparent proxy solution (HONK engine).')),
             E('section', { 'class': 'honk-cards' }, [
                 E('div', { 'class': 'honk-card' }, [
                     E('div', { 'class': 'honk-label' }, _('Memory Usage')),
