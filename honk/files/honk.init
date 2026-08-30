@@ -4,123 +4,51 @@ USE_PROCD=1
 START=96
 STOP=10
 
-EXTRA_COMMANDS="hot_reload"
-EXTRA_HELP="        hot_reload  Reload service (forces a clean restart)"
+extra_command "hot_reload" "Hot-reload service"
 
 CONF="honk"
 PROG="/usr/bin/honk-core"
-
+# honk-core hardcodes dae-compatible datapath names (dae0/dae0peer + daens);
+# these are the real interface/netns names, not leftover dae config.
 HONK_HOST_IFACE="dae0"
 HONK_PEER_IFACE="dae0peer"
 HONK_NETNS_NAME="daens"
 HONK_NETNS_PATH="/run/netns/$HONK_NETNS_NAME"
-
-LOG_DIR="/var/log/honk"
-LOG_FILE="$LOG_DIR/honk.log"
-LOG_OLD_FILE="$LOG_FILE.old"
-LOG_MAX_SIZE=1048576
-LOG_MONITOR_PID="/var/run/honk_log_monitor.pid"
-
 RESOLV_HONK="/tmp/resolv.conf.honk"
-
-# 每个网络/DNS 步骤的硬上限，让任意一次 stop+start 都不会超过 rpcd 的 30s 上限。
-NET_STEP_TIMEOUT=3
-
 
 set_chmod_640() {
     mkdir -p /etc/honk/config.d
-    chmod -R u=rwX,g=rX,o= /etc/honk/ 2>/dev/null || true
+    chmod -R 640 /etc/honk/ 2>/dev/null || true
 }
 
+update_cron() {
+    local temp_cron="/tmp/root.cron"
 
-prepare_log() {
-    mkdir -p "$LOG_DIR"
+    if [ -f /etc/crontabs/root ]; then
+        grep -v '/etc/init.d/honk hot_reload' /etc/crontabs/root > "$temp_cron" 2>/dev/null
+    fi
+    : >> "$temp_cron"
 
-    if [ -f "$LOG_FILE" ]; then
-        local size
-        size=$(wc -c < "$LOG_FILE" 2>/dev/null)
-
-        case "$size" in
-            ''|*[!0-9]*)
-                size=0
-                ;;
-        esac
-
-        if [ "$size" -gt "$LOG_MAX_SIZE" ]; then
-            mv "$LOG_FILE" "$LOG_OLD_FILE" 2>/dev/null || true
-        fi
+    local auto_update
+    auto_update=$(uci -q get honk.config.subscribe_auto_update)
+    if [ "$1" = "add" ] && [ "${auto_update:-0}" -eq 1 ]; then
+        local min=$((RANDOM % 60))
+        local hr=$(uci -q get honk.config.subscribe_update_day_time)
+        local wk=$(uci -q get honk.config.subscribe_update_week_time)
+        echo "$min ${hr:-*} * * ${wk:-*} /etc/init.d/honk hot_reload >/dev/null 2>&1" >> "$temp_cron"
     fi
 
-    [ -f "$LOG_FILE" ] || touch "$LOG_FILE"
-
-    chmod 640 "$LOG_FILE" 2>/dev/null || true
+    crontab "$temp_cron" 2>/dev/null
+    rm -f "$temp_cron"
 }
-
-
-stop_log_monitor() {
-    if [ -f "$LOG_MONITOR_PID" ]; then
-        local old_pid
-        old_pid="$(cat "$LOG_MONITOR_PID" 2>/dev/null)"
-
-        case "$old_pid" in
-            ''|*[!0-9]*)
-                ;;
-            *)
-                kill "$old_pid" 2>/dev/null || true
-                ;;
-        esac
-
-        rm -f "$LOG_MONITOR_PID"
-    fi
-}
-
-
-rotate_log() {
-    local size
-
-    [ -f "$LOG_FILE" ] || return 0
-
-    size=$(wc -c < "$LOG_FILE" 2>/dev/null) || return 0
-
-    case "$size" in
-        ''|*[!0-9]*)
-            return 0
-            ;;
-    esac
-
-    [ "$size" -gt "$LOG_MAX_SIZE" ] || return 0
-
-    # 先保存当前内容，再截断原文件。
-    # 不使用 mv，避免 honk-core 已打开的文件描述符指向旧 inode。
-    cp "$LOG_FILE" "$LOG_OLD_FILE" 2>/dev/null || return 0
-
-    : > "$LOG_FILE"
-
-    chmod 640 "$LOG_FILE" 2>/dev/null || true
-}
-
-
-log_monitor() {
-    echo "$$" > "$LOG_MONITOR_PID"
-
-    trap 'rm -f "$LOG_MONITOR_PID"; exit 0' INT TERM EXIT
-
-    while :; do
-        sleep 60
-        rotate_log
-    done
-}
-
 
 cleanup_netns() {
-    timeout "$NET_STEP_TIMEOUT" ip netns del "$HONK_NETNS_NAME" 2>/dev/null || true
-    timeout "$NET_STEP_TIMEOUT" umount "$HONK_NETNS_PATH" 2>/dev/null || true
+    ip netns del "$HONK_NETNS_NAME" 2>/dev/null || true
+    umount "$HONK_NETNS_PATH" 2>/dev/null || true
     rm -f "$HONK_NETNS_PATH" 2>/dev/null || true
-
-    timeout "$NET_STEP_TIMEOUT" ip link del "$HONK_HOST_IFACE" 2>/dev/null || true
-    timeout "$NET_STEP_TIMEOUT" ip link del "$HONK_PEER_IFACE" 2>/dev/null || true
+    ip link del "$HONK_HOST_IFACE" 2>/dev/null || true
+    ip link del "$HONK_PEER_IFACE" 2>/dev/null || true
 }
-
 
 hijack_resolv_conf() {
     grep -q ' /tmp/resolv\.conf ' /proc/mounts && return 0
@@ -128,159 +56,76 @@ hijack_resolv_conf() {
     grep -E '^(search|domain) ' /tmp/resolv.conf > "$RESOLV_HONK" 2>/dev/null
 
     local dns_list LOGICAL_WAN
-
     . /lib/functions/network.sh
-
     network_find_wan LOGICAL_WAN 2>/dev/null
-
     if [ -n "$LOGICAL_WAN" ]; then
         dns_list=$(ubus call "network.interface.$LOGICAL_WAN" status 2>/dev/null | \
             jsonfilter -e '@["dns-server"][*]' 2>/dev/null)
     fi
 
     if [ -z "$dns_list" ] && [ -f "/tmp/resolv.conf.d/resolv.conf.auto" ]; then
-        dns_list=$(awk '/^nameserver/{print $2}' \
-            "/tmp/resolv.conf.d/resolv.conf.auto")
+        dns_list=$(awk '/^nameserver/{print $2}' "/tmp/resolv.conf.d/resolv.conf.auto")
     fi
 
-    local added=0
+    [ -z "$dns_list" ] && dns_list="119.29.29.29 223.5.5.5"
 
     for dns in $dns_list; do
-        case "$dns" in
-            *[!0-9a-fA-F:.%]*|'')
-                continue
-                ;;
-        esac
-
         echo "nameserver $dns" >> "$RESOLV_HONK"
-        added=1
     done
 
-    if [ "$added" -eq 0 ]; then
-        echo "nameserver 119.29.29.29" >> "$RESOLV_HONK"
-        echo "nameserver 223.5.5.5" >> "$RESOLV_HONK"
-    fi
-
-    # 单步 timeout 防护：bind mount / ro-remount 偶发挂死时不再无界等待。
-    timeout "$NET_STEP_TIMEOUT" mount --bind "$RESOLV_HONK" /tmp/resolv.conf 2>/dev/null || true
-    timeout "$NET_STEP_TIMEOUT" mount -o remount,ro,bind /tmp/resolv.conf 2>/dev/null || true
+    mount --bind "$RESOLV_HONK" /tmp/resolv.conf
+    mount -o remount,ro,bind /tmp/resolv.conf
 }
 
-
 restore_resolv_conf() {
-    if grep -q ' /tmp/resolv\.conf ' /proc/mounts; then
-        timeout "$NET_STEP_TIMEOUT" umount -l /tmp/resolv.conf 2>/dev/null || true
-    fi
-
+    grep -q ' /tmp/resolv\.conf ' /proc/mounts || return 0
+    mount -o remount,rw,bind /tmp/resolv.conf 2>/dev/null
+    umount /tmp/resolv.conf 2>/dev/null
     rm -f "$RESOLV_HONK"
 }
 
-
 start_service() {
-    local enabled config_file tz_value
+    local enabled config_file
 
     config_load "$CONF"
     config_get_bool enabled "config" "enabled" "0"
+    [ "$enabled" -eq "1" ] || return 1
 
-    logger -t honk "start_service: enabled=$enabled"
-
-    [ "$enabled" -eq "1" ] || {
-        logger -t honk "start_service: disabled, not starting"
-        return 1
-    }
-
-    [ -x "$PROG" ] || {
-        logger -t honk "start_service: $PROG not found or not executable"
-        return 1
-    }
-
-    config_get config_file \
-        "config" \
-        "config_file" \
-        "/etc/honk/config.dae"
-
-    # 清理可能残留的旧日志监控进程。
-    stop_log_monitor
+    config_get config_file "config" "config_file" "/etc/honk/config.dae"
 
     set_chmod_640
-    prepare_log
-
+    update_cron "add"
     cleanup_netns
-    hijack_resolv_conf
-
-    tz_value="$(cat /etc/TZ 2>/dev/null)"
+	hijack_resolv_conf
 
     procd_open_instance "$CONF"
-
-    [ -n "$tz_value" ] && \
-        procd_set_param env TZ="$tz_value"
-
     procd_set_param env DAE_LOCATION_ASSET="/usr/share/v2ray"
-
-    # 使用 exec 保证 procd 最终追踪 honk-core。
-    # stdout/stderr 写入固定日志文件，供 JS 日志页面读取。
-    procd_set_param command /bin/sh -c \
-        "exec \"$PROG\" --config \"$config_file\" >> \"$LOG_FILE\" 2>&1"
-
-    # honk 使用 dae0/dae0peer 作为数据面接口。
-    # 接口异常消失时由 procd 触发服务恢复。
-    procd_set_param netdev "$HONK_HOST_IFACE" "$HONK_PEER_IFACE"
-
+    procd_set_param command "$PROG" --config "$config_file"
+	procd_set_param netdev "$HONK_HOST_IFACE" "$HONK_PEER_IFACE"
     procd_set_param limits core="unlimited"
     procd_set_param limits nofile="1000000 1000000"
-
     procd_set_param term_timeout 8
     procd_set_param respawn 3600 5 5
-
+    procd_set_param stderr 1
     procd_close_instance
-
-    # 启动日志监控器。
-    # monitor 独立于 honk-core，只负责周期性限制日志文件大小。
-    log_monitor >/dev/null 2>&1 &
-
-    logger -t honk "start_service: honk-core launched"
 }
 
-
 service_stopped() {
-    logger -t honk "service_stopped: cleaning up"
-
-    # 先停止日志监控器，再处理网络和 DNS。
-    stop_log_monitor
-
+    update_cron "remove"
     restore_resolv_conf
     cleanup_netns
 }
 
-
 reload_service() {
-    hot_reload
+    stop
+    start
 }
-
 
 service_triggers() {
     procd_add_reload_trigger "$CONF"
 }
 
-
 hot_reload() {
     set_chmod_640
-
-    # 把真正的 stop+start 推到后台子 shell，立刻返回 0。
-    # repcd file.exec 默认有 30s 硬超时；网络清理里任意一步
-    # 偶尔卡死时，前端 XHR 会先超时变成 "timed out"。
-    # detach 后 UI 永远即时收到 "重载服务" 成功的反馈。
-    (
-        if /etc/init.d/honk running 2>/dev/null; then
-            logger -t honk "hot_reload: performing clean restart"
-            /etc/init.d/honk stop   >/dev/null 2>&1
-            /etc/init.d/honk start  >/dev/null 2>&1
-        else
-            logger -t honk "hot_reload: service not running, starting"
-            /etc/init.d/honk start  >/dev/null 2>&1
-        fi
-    ) >/dev/null 2>&1 &
-    disown 2>/dev/null || true
-
-    return 0
+    /etc/init.d/honk running && "$PROG" reload
 }
