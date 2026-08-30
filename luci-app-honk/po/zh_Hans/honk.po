@@ -1,5 +1,11 @@
-msgid "HONK"
-msgstr "HONK"
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Project-Id-Version: luci-app-honk\n"
+"Language-Team: none\n"
+"Language: zh_Hans\n"
+"MIME-Version: 1.0\n"
+"Content-Transfer-Encoding: 8bit\n"
 
 msgid "RUNNING"
 msgstr "运行中"
@@ -76,57 +82,50 @@ msgstr "更新时间（每天）"
 msgid "Format Code"
 msgstr "格式化代码"
 
-msgid "控制"
-msgstr "控制"
-
-msgid "配置"
-msgstr "配置"
-
-msgid "日志"
-msgstr "日志"
-
-msgid "加载中"
-msgstr "加载中"
-
-msgid "基于 Rust eBPF 的高性能透明代理解决方案 (honk 引擎) 。"
-msgstr "基于 Rust eBPF 的高性能透明代理解决方案 (honk 引擎) 。"
-
-msgid "内存占用"
-msgstr "内存占用"
-
-msgid "运行时间"
-msgstr "运行时间"
-
-msgid "引擎版本"
-msgstr "引擎版本"
-
-msgid "服务"
-msgstr "服务"
-
-msgid "开机自启"
-msgstr "开机自启"
-
-msgid "状态控制"
-msgstr "状态控制"
-
-msgid "启动"
-msgstr "启动"
-
-msgid "重启"
-msgstr "重启"
-
-msgid "停止"
-msgstr "停止"
-
-msgid "面板"
-msgstr "面板"
-
-msgid "操作失败，请查看日志"
-msgstr "操作失败，请查看日志"
-
-
 msgid "Control"
 msgstr "控制"
+
+msgid "Configuration"
+msgstr "配置"
+
+msgid "Log"
+msgstr "日志"
+
+msgid "Loading..."
+msgstr "加载中..."
+
+msgid "eBPF-based Linux high-performance transparent proxy solution (HONK engine)."
+msgstr "基于 Rust eBPF 的高性能透明代理解决方案 (honk 引擎)。"
+
+msgid "Uptime"
+msgstr "运行时间"
+
+msgid "Engine Version"
+msgstr "引擎版本"
+
+msgid "Service"
+msgstr "服务"
+
+msgid "Autostart"
+msgstr "开机自启"
+
+msgid "Status Control"
+msgstr "状态控制"
+
+msgid "Start"
+msgstr "启动"
+
+msgid "Restart"
+msgstr "重启"
+
+msgid "Stop"
+msgstr "停止"
+
+msgid "Dashboard"
+msgstr "面板"
+
+msgid "Operation failed, please check logs"
+msgstr "操作失败，请查看日志"
 
 msgid "Configuration cannot be empty!"
 msgstr "配置不能为空！"
@@ -147,7 +146,7 @@ msgid "Service action failed: %s"
 msgstr "服务操作失败：%s"
 
 msgid "Please enable \"Autostart\" before clicking Start."
-msgstr "请先打开\"开机自启\"开关，再点击 启动。"
+msgstr "请先打开\"开机自启\"开关，再点击启动。"
 
 msgid "View Logs"
 msgstr "查看日志"
@@ -200,8 +199,8 @@ msgstr "滚动到末尾"
 msgid "Clear Log"
 msgstr "清空日志"
 
-msgid "Refresh every 2 seconds."
-msgstr "每 2 秒刷新一次。"
+msgid "Refresh every %s seconds."
+msgstr "每 %s 秒刷新一次。"
 
 msgid "Are you sure you want to clear the log file?"
 msgstr "确定要清空日志文件吗？"
