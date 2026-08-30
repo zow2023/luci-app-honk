@@ -267,7 +267,7 @@ return view.extend({
             ]),
             E('div', { 'class': 'cbi-section' }, [
                 E('div', { 'id': 'log_textarea' }, E('pre', {}, '')),
-                E('div', { 'style': 'text-align:right;margin-top:5px' }, E('small', {}, _('Refresh every 2 seconds.')))
+                E('div', { 'style': 'text-align:right;margin-top:5px' }, E('small', {}, _('Refresh every 5 seconds.')))
             ])
         ]);
 
