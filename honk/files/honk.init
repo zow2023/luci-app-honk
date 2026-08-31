@@ -20,29 +20,6 @@ set_chmod_640() {
     chmod -R u=rwX,g=rX,o= /etc/honk/ 2>/dev/null || true
 }
 
-update_cron() {
-    local temp_cron="/tmp/root.cron"
-    local init_script="/etc/init.d/$CONF"
-
-    if [ -f /etc/crontabs/root ]; then
-        grep -v "$init_script hot_reload" /etc/crontabs/root > "$temp_cron" 2>/dev/null
-    fi
-    : >> "$temp_cron"
-
-    local auto_update
-    auto_update=$(uci -q get honk.config.subscribe_auto_update)
-    if [ "$1" = "add" ] && [ "${auto_update:-0}" -eq 1 ]; then
-        local min=15
-        local hr=$(uci -q get honk.config.subscribe_update_day_time)
-        local wk=$(uci -q get honk.config.subscribe_update_week_time)
-        echo "$min ${hr:-*} * * ${wk:-*} $init_script hot_reload >/dev/null 2>&1" >> "$temp_cron"
-    fi
-
-    crontab "$temp_cron" 2>/dev/null
-    rm -f "$temp_cron"
-    /etc/init.d/cron reload 2>/dev/null || true
-}
-
 cleanup_netns() {
     ip netns del "$HONK_NETNS_NAME" 2>/dev/null || true
     umount "$HONK_NETNS_PATH" 2>/dev/null || true
@@ -113,7 +90,6 @@ start_service() {
 
     set_chmod_640
     mkdir -p /var/log/honk
-    update_cron "add"
     cleanup_netns
     hijack_resolv_conf
 
@@ -138,7 +114,6 @@ start_service() {
 
 service_stopped() {
     logger -t honk "service_stopped: cleaning up"
-    update_cron "remove"
     restore_resolv_conf
     cleanup_netns
 }
