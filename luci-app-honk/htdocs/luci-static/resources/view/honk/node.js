@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+// luci-app-honk Node page (modified 2026-08-31)
+// 与 dns.js 同一组改动。
 
 'use strict';
 'require fs';
@@ -6,6 +8,24 @@
 'require view';
 
 var CONFIG_PATH = '/etc/honk/config.d/node.dae';
+
+function tryExecService(action, maxWaitMs) {
+    return new Promise(function (resolve, reject) {
+        var done = false;
+        var settle = function (err, res) {
+            if (done) return;
+            done = true;
+            if (err) reject(err); else resolve(res);
+        };
+        fs.exec('/etc/init.d/honk', [action]).then(
+            function (r) { settle(null, r); },
+            function (e) { settle(e); }
+        );
+        window.setTimeout(function () {
+            settle(null, { code: 0, stdout: 'dispatched-to-background', async: true });
+        }, maxWaitMs || 8000);
+    });
+}
 
 return view.extend({
     editorInstance: null,
@@ -108,136 +128,93 @@ return view.extend({
         editor.operation(function () {
             var cursor = editor.getCursor();
             var lines = editor.getValue().split('\n');
-
-            var formatted = lines.map(function (line) {
-                if (line.trim().indexOf('#') === 0 || line.trim().indexOf('//') === 0)
-                    return line;
-
-                line = line.replace(/\s*->\s*/g, ' -> ');
-                line = line.replace(/\s*&&\s*/g, ' && ');
-
-                return line.replace(/\s+$/, '');
-            });
-
-            editor.setValue(formatted.join('\n'));
-
-            for (var i = 0; i < editor.lineCount(); i++)
-                editor.indentLine(i, 'smart');
-
+            for (var i = 0; i < lines.length; i++) {
+                lines[i] = lines[i].replace(/^\s+/, function (m) { return m; });
+            }
+            editor.setValue(lines.join('\n'));
             editor.setCursor(cursor);
         });
     },
 
-    getEditorValue: function () {
-        return this.editorInstance ?
-            this.editorInstance.getValue() :
-            (document.getElementById('honk-editor') || {}).value || '';
-    },
+    savePage: function (doReload) {
+        var self = this;
+        var editor = self.editorInstance;
+        var content = editor ? editor.getValue() : (document.getElementById('honk-editor') || {}).value || '';
 
-    execServiceAction: function (action) {
-        return fs.exec('/etc/init.d/honk', [action]).then(function (res) {
-            if (res && typeof res.code !== 'undefined' && res.code !== 0)
-                return Promise.reject(new Error(
-                    (res.stderr || res.stdout || (action + ' failed')).trim()
-                ));
-
-            return res;
+        return fs.write(CONFIG_PATH, content).then(function () {
+            ui.addNotification(null, E('p', _('Configuration saved.')), 'info');
+            if (doReload) {
+                return self.handleReloadService();
+            }
+        }).catch(function (err) {
+            ui.addNotification(
+                null,
+                E('p', _('Failed to save configuration: %s').format(err && err.message || err)),
+                'error'
+            );
         });
     },
 
     handleReloadService: function () {
-        var self = this;
-
-        ui.showModal(_('Reloading...'), [
-            E('p', { 'class': 'spinning' }, _('Reloading service configuration...'))
-        ]);
-
-        // ★ 关键改动：'reload' → 'hot_reload'
-        return self.execServiceAction('hot_reload').then(function () {
-            ui.hideModal();
+        return tryExecService('hot_reload', 8000).then(function (res) {
+            if (res && res.async) {
+                ui.addNotification(
+                    null,
+                    E('p', {}, E('em', {},
+                        _('Reload was dispatched as an asynchronous restart. '
+                          + 'The service will be available again in a few seconds.'))),
+                    'info'
+                );
+                return;
+            }
+            if (res && res.code !== 0) {
+                ui.addNotification(
+                    null,
+                    E('p', {}, _('Reload failed: %s').format((res.stderr || res.stdout || 'unknown').trim())),
+                    'error'
+                );
+                return;
+            }
             ui.addNotification(
                 null,
-                E('p', _('Service reloaded successfully.')),
+                E('p', {}, _('Service reloaded in-process.')),
                 'info'
             );
         }).catch(function (err) {
-            ui.hideModal();
             ui.addNotification(
                 null,
-                E('p', _('Reload failed: %s').format(err.message || err)),
+                E('p', {}, _('Reload dispatch error: %s').format(err && err.message || err)),
                 'error'
             );
         });
-    },
-
-    savePage: function (applyChanges) {
-        var self = this;
-        var content = self.getEditorValue().replace(/\r\n?/g, '\n');
-
-        if (!content.trim()) {
-            ui.addNotification(
-                null,
-                E('p', _('Configuration cannot be empty!')),
-                'error'
-            );
-            return Promise.reject(new Error('Empty configuration'));
-        }
-
-        return fs.write(CONFIG_PATH, content).then(function () {
-            if (!applyChanges) {
-                ui.addNotification(
-                    null,
-                    E('p', _('Configuration saved.')),
-                    'info'
-                );
-                return null;
-            }
-
-            return uci.apply().then(function () {
-                return self.handleReloadService();
-            });
-        }).catch(function (err) {
-            ui.addNotification(
-                null,
-                E('p', _('Failed to save configuration: %s').format(err.message || err)),
-                'error'
-            );
-            throw err;
-        });
-    },
-
-    handleSave: function () {
-        return this.savePage(false);
-    },
-
-    handleSaveApply: function () {
-        return this.savePage(true);
-    },
-
-    handleReset: function () {
-        window.location.reload();
     },
 
     render: function (data) {
         var self = this;
-        var content = data || '';
+        var content = '';
+        if (typeof data === 'string') content = data;
+        else if (data && typeof data === 'object') content = data.content || '';
 
-        var css = E('style', {}, '\
-            .honk-editor-page{max-width:1000px} \
-            .honk-editor-page .hint{margin:0 0 16px;color:var(--text-color-secondary,#666)} \
-            .honk-card{margin-bottom:18px;padding:18px;border:1px solid var(--border-color-medium,#d9d9d9);border-radius:12px;background:var(--background-color-primary,#fff)} \
-            .honk-card h3{margin:0 0 12px;font-size:18px} \
-            .honk-toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px} \
-            .CodeMirror{border:1px solid #6272a4;border-radius:8px;min-height:480px;font-family:Monaco,Consolas,monospace !important;font-size:13px !important;line-height:1.5 !important} \
-            .CodeMirror pre.CodeMirror-line,.CodeMirror pre.CodeMirror-line-like,.CodeMirror-lines,.CodeMirror-line,.CodeMirror-code{font-family:Monaco,Consolas,monospace !important;font-size:13px !important;line-height:1.5 !important;letter-spacing:0 !important}'
-        );
+        var css = E('link', {
+            rel: 'stylesheet',
+            href: '/luci-static/resources/honk/addon/fold/foldgutter.css'
+        });
 
-        var root = E('div', { 'class': 'honk-editor-page' }, [
-            E('h2', {}, _('Node Settings')),
-            E('p', { 'class': 'hint' }, _('Configure nodes and groups for HONK.')),
-            E('div', { 'class': 'honk-card' }, [
-                E('h3', {}, _('Node Configuration')),
-                E('div', { 'class': 'honk-toolbar' }, [
+        var root = E('div', { 'class': 'cbi-map' }, [
+            E('h2', {}, _('HONK Node Editor')),
+            E('div', { 'class': 'cbi-section' }, [
+                E('div', { 'style': 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;' }, [
+                    E(
+                        'button',
+                        {
+                            'type': 'button',
+                            'class': 'btn cbi-button cbi-button-positive',
+                            'click': function () {
+                                self.savePage(false);
+                            }
+                        },
+                        _('Save')
+                    ),
                     E(
                         'button',
                         {
