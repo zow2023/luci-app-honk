@@ -8,13 +8,6 @@
 'require ui';
 'require view';
 
-var callFileWrite = rpc.declare({
-    object: 'file',
-    method: 'write',
-    params: ['path', 'data'],
-    expect: { result: false }
-});
-
 var callServiceList = rpc.declare({
     object: 'service',
     method: 'list',
@@ -23,17 +16,18 @@ var callServiceList = rpc.declare({
 });
 
 var LOG_PATH = '/var/log/honk/honk.log';
+var MAX_LINES = 2000;
 
 return view.extend({
     isPaused: false,
-    originalLogContent: '',
-    logEntriesCache: null,
-    debounceTimer: null,
-    lastLogRawContent: null,
-    maxDisplayLines: 5000,
+    rawLogLines: [],
+    lastRawContent: null,
 
     isServiceRunning: function () {
-        return L.resolveDefault(callServiceList('honk'), {}).then(function (svc) {
+        return L.resolveDefault(
+            callServiceList('honk'),
+            {}
+        ).then(function (svc) {
             return !!(
                 svc &&
                 svc.honk &&
@@ -53,195 +47,238 @@ return view.extend({
         dom.content(logText, E('pre', {}, [
             E('div', {
                 'style': 'text-align:center;color:#888;padding:20px;'
-            }, _('Log is empty.'))
+            }, _('Log is empty or service stopped.'))
         ]));
+    },
+
+    escapeHtml: function (str) {
+        return String(str || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
     },
 
     formatLogLine: function (line) {
         /*
-         * Escape the complete log line before inserting the formatted
-         * result into innerHTML. This prevents log content from being
-         * interpreted as HTML.
+         * Escape the original log content before inserting controlled
+         * HTML markup. This prevents log content from being interpreted
+         * as HTML.
          */
-        line = String(line || '')
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;');
+        var escaped = this.escapeHtml(line);
 
-        /*
-         * Match IP addresses and common log severity indicators in a
-         * single pass. The generated HTML is not processed again by
-         * this replacement operation.
-         */
-        var regex = /(\b\d{1,3}(?:\.\d{1,3}){3}\b)|(\blevel=(error|warn|warning|info|debug)\b)|(\b(?:error|failed|warn|warning|info|debug)\b)/gi;
+        var regex =
+            /(\b\d{1,3}(?:\.\d{1,3}){3}\b)|(\blevel=(error|warn|warning|info|debug)\b)|(\b(?:error|failed|warn|warning|info|debug)\b)/gi;
 
-        line = line.replace(regex, function (match, ip, levelPair, levelVal, keyword) {
-            if (ip)
-                return '<span class="log-ip">' + ip + '</span>';
+        return '<div class="log-container">' +
+            escaped.replace(
+                regex,
+                function (match, ip, levelPair, levelVal, keyword) {
+                    if (ip)
+                        return '<span class="log-ip">' + ip + '</span>';
 
-            if (levelPair) {
-                var cls = levelVal.toLowerCase();
+                    if (levelPair) {
+                        var cls = levelVal.toLowerCase();
 
-                if (cls === 'warning')
-                    cls = 'warn';
+                        if (cls === 'warning')
+                            cls = 'warn';
 
-                return 'level=<span class="log-' + cls + '">' + levelVal + '</span>';
-            }
+                        return 'level=<span class="log-' +
+                            cls +
+                            '">' +
+                            levelVal +
+                            '</span>';
+                    }
 
-            if (keyword) {
-                var kwCls = keyword.toLowerCase();
+                    if (keyword) {
+                        var kwCls = keyword.toLowerCase();
 
-                if (kwCls === 'failed')
-                    kwCls = 'error';
+                        if (kwCls === 'failed')
+                            kwCls = 'error';
 
-                if (kwCls === 'warning')
-                    kwCls = 'warn';
+                        if (kwCls === 'warning')
+                            kwCls = 'warn';
 
-                return '<span class="log-' + kwCls + '">' + keyword + '</span>';
-            }
+                        return '<span class="log-' +
+                            kwCls +
+                            '">' +
+                            keyword +
+                            '</span>';
+                    }
 
-            return match;
-        });
-
-        return '<div class="log-container">' + line + '</div>';
+                    return match;
+                }
+            ) +
+            '</div>';
     },
 
+    /*
+     * Keep the debounce timer inside the returned function's closure.
+     * This prevents different debounce instances from sharing a timer.
+     */
     debounce: function (fn, wait) {
-        var self = this;
+        var timer = null;
 
         return function () {
-            var args = arguments;
             var ctx = this;
+            var args = arguments;
 
-            clearTimeout(self.debounceTimer);
+            clearTimeout(timer);
 
-            self.debounceTimer = window.setTimeout(function () {
+            timer = window.setTimeout(function () {
                 fn.apply(ctx, args);
             }, wait);
         };
     },
 
-    cacheLogEntries: function () {
-        if (this.logEntriesCache)
-            return this.logEntriesCache;
-
-        var logContainer = document.getElementById('log_textarea');
-        var entries = logContainer ? logContainer.querySelectorAll('.log-container') : [];
-        var cache = [];
-
-        for (var i = 0; i < entries.length; i++) {
-            cache.push({
-                element: entries[i],
-                text: entries[i].textContent.toLowerCase()
-            });
-        }
-
-        this.logEntriesCache = cache;
-
-        return cache;
-    },
-
-    applyFilter: function (filter) {
-        var logContainer = document.getElementById('log_textarea');
-
-        if (!logContainer)
-            return;
-
-        filter = (filter || '').trim().toLowerCase();
-
-        var entries = this.cacheLogEntries();
-
-        window.requestAnimationFrame(function () {
-            for (var i = 0; i < entries.length; i++) {
-                entries[i].element.style.display =
-                    (!filter || entries[i].text.indexOf(filter) !== -1) ? '' : 'none';
-            }
-        });
-    },
-
-    renderLog: function (content) {
-        content = content || '';
-
-        if (this.lastLogRawContent === content)
-            return;
-
-        this.lastLogRawContent = content;
-
-        var lines = content.trim()
-            ? content.trim().split(/\r?\n/)
-            : [];
-
-        if (lines.length > this.maxDisplayLines)
-            lines = lines.slice(-this.maxDisplayLines);
-
-        lines.reverse();
-
-        var formatted = [];
-
-        for (var i = 0; i < lines.length; i++)
-            formatted.push(this.formatLogLine(lines[i]));
-
-        this.originalLogContent = formatted.join('');
-        this.logEntriesCache = null;
-
+    /*
+     * Filter raw log lines in memory and rebuild the DOM once.
+     *
+     * This avoids creating one DOM update per log entry and prevents
+     * the large style/reflow cost of hiding thousands of elements
+     * individually.
+     */
+    renderFilteredLog: function () {
         var logText = document.getElementById('log_textarea');
 
         if (!logText)
             return;
 
-        var pre = E('pre');
-        pre.innerHTML = this.originalLogContent || '';
-        dom.content(logText, pre);
-
         var filterInput = document.getElementById('filterInput');
+        var filter = filterInput
+            ? filterInput.value.trim().toLowerCase()
+            : '';
 
-        if (filterInput && filterInput.value)
-            this.applyFilter(filterInput.value);
+        var htmlBuffer = [];
+
+        for (var i = 0; i < this.rawLogLines.length; i++) {
+            var line = this.rawLogLines[i];
+
+            if (
+                !filter ||
+                line.toLowerCase().indexOf(filter) !== -1
+            ) {
+                htmlBuffer.push(this.formatLogLine(line));
+            }
+        }
+
+        var pre = E('pre');
+
+        /*
+         * formatLogLine() has already escaped the original log data.
+         * Only the controlled span/div markup is inserted here.
+         */
+        pre.innerHTML = htmlBuffer.join('');
+
+        dom.content(logText, pre);
     },
 
     refreshLog: function () {
         var self = this;
+        var logText = document.getElementById('log_textarea');
 
-        if (self.isPaused)
+        /*
+         * Do not start a new refresh if the view is no longer present
+         * or automatic refresh has been paused.
+         */
+        if (!logText || self.isPaused)
             return Promise.resolve();
 
         return self.isServiceRunning().then(function (running) {
             if (!running) {
-                self.originalLogContent = '';
-                self.logEntriesCache = null;
-                self.lastLogRawContent = null;
+                self.rawLogLines = [];
+                self.lastRawContent = null;
                 self.renderBlank();
+
                 return;
             }
 
-            return L.resolveDefault(
-                fs.read_direct(LOG_PATH, 'text'),
-                ''
-            ).then(function (content) {
-                self.renderLog(content);
+            /*
+             * Only read the newest MAX_LINES lines.
+             *
+             * This avoids loading the complete log file into JavaScript
+             * memory on low-resource OpenWrt devices.
+             */
+            return fs.exec(
+                '/usr/bin/tail',
+                ['-n', String(MAX_LINES), LOG_PATH]
+            ).then(function (res) {
+                if (!res || res.code !== 0) {
+                    throw new Error(
+                        (res && res.stderr) ||
+                        _('Failed to read log file.')
+                    );
+                }
+
+                var content = res.stdout || '';
+
+                /*
+                 * Avoid rebuilding the DOM when the log has not changed.
+                 */
+                if (self.lastRawContent === content)
+                    return;
+
+                self.lastRawContent = content;
+
+                if (!content) {
+                    self.rawLogLines = [];
+                } else {
+                    self.rawLogLines = content.split(/\r?\n/);
+
+                    /*
+                     * tail normally returns a trailing newline.
+                     * Remove only that artificial empty entry rather
+                     * than using trim(), which could alter meaningful
+                     * whitespace in the log.
+                     */
+                    if (
+                        self.rawLogLines.length &&
+                        self.rawLogLines[self.rawLogLines.length - 1] === ''
+                    ) {
+                        self.rawLogLines.pop();
+                    }
+
+                    /*
+                     * Newest log entry first.
+                     */
+                    self.rawLogLines.reverse();
+                }
+
+                self.renderFilteredLog();
             });
         }).catch(function (err) {
-            var logText = document.getElementById('log_textarea');
+            var currentLogText =
+                document.getElementById('log_textarea');
 
-            if (logText) {
-                dom.content(
-                    logText,
-                    E('pre', {}, _('Unknown error: %s').format(err.message || err))
-                );
-            }
+            if (!currentLogText)
+                return;
+
+            dom.content(
+                currentLogText,
+                E(
+                    'pre',
+                    {},
+                    _('Error loading log: %s').format(
+                        err.message || err
+                    )
+                )
+            );
         });
     },
 
     clearLog: function () {
         var self = this;
 
-        if (!window.confirm(_('Are you sure you want to clear the log file?')))
+        if (!window.confirm(
+            _('Are you sure you want to clear the log file?')
+        )) {
             return Promise.resolve();
+        }
 
-        return callFileWrite(LOG_PATH, '').then(function () {
-            self.originalLogContent = '';
-            self.logEntriesCache = null;
-            self.lastLogRawContent = null;
+        return fs.write(LOG_PATH, '').then(function () {
+            self.rawLogLines = [];
+            self.lastRawContent = null;
 
             var logText = document.getElementById('log_textarea');
 
@@ -256,7 +293,12 @@ return view.extend({
         }).catch(function (err) {
             ui.addNotification(
                 null,
-                E('p', _('Failed to clear log: %s').format(err.message || err)),
+                E(
+                    'p',
+                    _('Failed to clear log: %s').format(
+                        err.message || err
+                    )
+                ),
                 'error'
             );
         });
@@ -280,8 +322,8 @@ return view.extend({
             'id': 'filterInput',
             'type': 'text',
             'placeholder': _('Filter logs...'),
-            'input': self.debounce(function (ev) {
-                self.applyFilter(ev.target.value);
+            'input': self.debounce(function () {
+                self.renderFilteredLog();
             }, 200)
         });
 
@@ -291,28 +333,32 @@ return view.extend({
                     filterInput,
 
                     E('button', {
-                        'id': 'clearFilterButton',
                         'class': 'btn cbi-button cbi-button-neutral',
                         'type': 'button',
                         'click': function () {
                             filterInput.value = '';
-                            self.applyFilter('');
-                            self.logEntriesCache = null;
+                            self.renderFilteredLog();
                         }
                     }, _('Clear Filter')),
 
                     E('button', {
-                        'id': 'refreshToggleButton',
                         'class': 'btn cbi-button cbi-button-neutral',
                         'type': 'button',
                         'click': function (ev) {
+                            /*
+                             * Use currentTarget rather than target.
+                             * target may point to a child element if the
+                             * button later contains nested elements.
+                             */
+                            var btn = ev.currentTarget;
+
                             self.isPaused = !self.isPaused;
 
-                            ev.target.innerHTML = self.isPaused
+                            btn.innerHTML = self.isPaused
                                 ? '▶ ' + _('Resume Refresh')
                                 : '⏸ ' + _('Pause Refresh');
 
-                            ev.target.className = self.isPaused
+                            btn.className = self.isPaused
                                 ? 'btn cbi-button cbi-button-positive'
                                 : 'btn cbi-button cbi-button-neutral';
                         }
@@ -321,31 +367,31 @@ return view.extend({
 
                 E('div', { 'class': 'controls-row' }, [
                     E('button', {
-                        'id': 'scrollUpButton',
                         'class': 'btn cbi-button cbi-button-neutral',
                         'type': 'button',
                         'click': function () {
-                            var logText = document.getElementById('log_textarea');
+                            var logText =
+                                document.getElementById('log_textarea');
 
                             if (logText)
                                 logText.scrollTop = 0;
                         }
-                    }, _('Scroll to head')),
+                    }, _('Scroll to newest')),
 
                     E('button', {
-                        'id': 'scrollDownButton',
                         'class': 'btn cbi-button cbi-button-neutral',
                         'type': 'button',
                         'click': function () {
-                            var logText = document.getElementById('log_textarea');
+                            var logText =
+                                document.getElementById('log_textarea');
 
                             if (logText)
-                                logText.scrollTop = logText.scrollHeight;
+                                logText.scrollTop =
+                                    logText.scrollHeight;
                         }
-                    }, _('Scroll to tail')),
+                    }, _('Scroll to oldest')),
 
                     E('button', {
-                        'id': 'clearLogButton',
                         'class': 'btn cbi-button cbi-button-negative',
                         'type': 'button',
                         'click': function () {
@@ -356,10 +402,23 @@ return view.extend({
             ]),
 
             E('div', { 'class': 'cbi-section' }, [
-                E('div', { 'id': 'log_textarea' }, E('pre', {}, '')),
-                E('div', {
-                    'style': 'text-align:right;margin-top:5px'
-                }, E('small', {}, _('Refresh every 5 seconds.')))
+                E(
+                    'div',
+                    { 'id': 'log_textarea' },
+                    E('pre', {}, '')
+                ),
+
+                E(
+                    'div',
+                    {
+                        'style': 'text-align:right;margin-top:5px'
+                    },
+                    E(
+                        'small',
+                        {},
+                        _('Refresh every 5 seconds.')
+                    )
+                )
             ])
         ]);
 
