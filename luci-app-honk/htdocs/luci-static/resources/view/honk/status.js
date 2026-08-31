@@ -139,22 +139,10 @@ return view.extend({
     },
 
     execService: function (action) {
-        return new Promise(function (resolve, reject) {
-            var done = false;
-            var settle = function (err, res) {
-                if (done) return;
-                done = true;
-                if (err) reject(err); else resolve(res);
-            };
-            fs.exec('/etc/init.d/honk', [action]).then(function (res) {
-                if (res && typeof res.code !== 'undefined' && res.code !== 0)
-                    settle(new Error((res.stderr || res.stdout || (action + ' failed')).trim()));
-                else
-                    settle(null, res);
-            }, function (err) { settle(err); });
-            window.setTimeout(function () {
-                settle(null, { code: 0, stdout: 'dispatched', stderr: '' });
-            }, 28000);
+        return fs.exec('/etc/init.d/honk', [action]).then(function (res) {
+            if (res && typeof res.code !== 'undefined' && res.code !== 0)
+                return Promise.reject(new Error((res.stderr || res.stdout || (action + ' failed')).trim()));
+            return res;
         });
     },
 
