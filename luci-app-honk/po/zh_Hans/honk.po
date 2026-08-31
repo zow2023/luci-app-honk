@@ -171,11 +171,11 @@ msgstr "恢复刷新"
 msgid "Pause Refresh"
 msgstr "暂停刷新"
 
-msgid "Scroll to head"
-msgstr "滚动到顶部"
+msgid "Scroll to newest"
+msgstr "滚动到最新"
 
-msgid "Scroll to tail"
-msgstr "滚动到底部"
+msgid "Scroll to oldest"
+msgstr "滚动到最旧"
 
 msgid "Clear Log"
 msgstr "清空日志"
