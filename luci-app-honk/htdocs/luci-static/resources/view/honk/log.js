@@ -11,7 +11,7 @@
 var LOG_PATH = '/var/log/honk/honk.log';
 var MAX_SAFE_SIZE = 200 * 1024;
 var MAX_DISPLAY_LINES = 1000;
-var MAX_TAIL_BYTES = 200 * 1024;
+var MAX_TAIL_BYTES = 64 * 1024; // 64KB 足够展示 1000 行日志
 
 return view.extend({
     isPaused: false,
@@ -19,7 +19,61 @@ return view.extend({
     lastLogMtime: null,
     logEntriesCache: null,
     refreshInProgress: false,
-    firstLoad: true,
+    loadError: null,
+    _pollHandle: null,
+
+    /*
+     * 公共读取函数：根据 stat 结果读取日志内容。
+     * 小文件直接全量读取，大文件只取尾部，并跳过首个可能不完整的行。
+     */
+    _fetchLogContent: function (stat) {
+        if (stat.size <= MAX_SAFE_SIZE) {
+            return fs.read_direct(LOG_PATH, 'text').then(function (content) {
+                return content || '';
+            });
+        }
+
+        return fs.exec('/usr/bin/tail', [
+            '-c', String(MAX_TAIL_BYTES), LOG_PATH
+        ]).then(function (res) {
+            if (!res || res.code !== 0) {
+                return '';
+            }
+
+            var content = res.stdout || '';
+            var firstNewline = content.indexOf('\n');
+
+            return firstNewline >= 0
+                ? content.substring(firstNewline + 1)
+                : content;
+        });
+    },
+
+    /*
+     * load() 钩子：在 render 之前预取日志内容，提升首屏加载体验。
+     */
+    load: function () {
+        var self = this;
+
+        return fs.stat(LOG_PATH).then(function (stat) {
+            if (!stat || stat.size === 0) {
+                self.lastLogSize = 0;
+                self.lastLogMtime = null;
+                return '';
+            }
+
+            self.lastLogSize  = String(stat.size);
+            self.lastLogMtime = stat.mtime !== undefined
+                ? String(stat.mtime)
+                : '';
+
+            return self._fetchLogContent(stat);
+        }).catch(function (err) {
+            // 记录错误，稍后在 render 中展示，不阻塞页面加载
+            self.loadError = err;
+            return '';
+        });
+    },
 
     formatLogLine: function (line) {
         line = String(line || '')
@@ -63,7 +117,6 @@ return view.extend({
     },
 
     debounce: function (fn, wait) {
-        /* 使用局部闭包变量 timer，解决在多组件间共享 self.debounceTimer 导致的定时器覆盖 Bug */
         var timer = null;
 
         return function () {
@@ -102,7 +155,6 @@ return view.extend({
     },
 
     clearFilterHighlights: function (element) {
-        /* 增加快速判定：若不存在高亮节点则立即返回，避免无效 DOM 查询与 normalize 造成的卡顿 */
         if (!element || !element.querySelector('.filter-highlight'))
             return;
 
@@ -182,9 +234,7 @@ return view.extend({
 
             if (lastIndex < text.length) {
                 fragment.appendChild(
-                    document.createTextNode(
-                        text.substring(lastIndex)
-                    )
+                    document.createTextNode(text.substring(lastIndex))
                 );
             }
 
@@ -231,61 +281,23 @@ return view.extend({
             if (!stat || stat.size === 0) {
                 var changed = self.lastLogSize !== 0;
 
-                self.lastLogSize = 0;
+                self.lastLogSize  = 0;
                 self.lastLogMtime = null;
 
-                return {
-                    changed: changed,
-                    content: ''
-                };
+                return { changed: changed, content: '' };
             }
 
-            var size = String(stat.size);
+            var size  = String(stat.size);
             var mtime = stat.mtime !== undefined ? String(stat.mtime) : '';
 
-            if (!self.firstLoad &&
-                self.lastLogSize === size &&
-                self.lastLogMtime === mtime) {
-                return {
-                    changed: false,
-                    content: null
-                };
-            }
+            if (self.lastLogSize === size && self.lastLogMtime === mtime)
+                return { changed: false, content: null };
 
-            self.lastLogSize = size;
+            self.lastLogSize  = size;
             self.lastLogMtime = mtime;
 
-            if (stat.size <= MAX_SAFE_SIZE) {
-                return fs.read_direct(LOG_PATH, 'text').then(function (content) {
-                    return {
-                        changed: true,
-                        content: content || ''
-                    };
-                });
-            }
-
-            return fs.exec('/usr/bin/tail', [
-                '-c',
-                String(MAX_TAIL_BYTES),
-                LOG_PATH
-            ]).then(function (res) {
-                if (!res || res.code !== 0) {
-                    return {
-                        changed: true,
-                        content: ''
-                    };
-                }
-
-                var content = res.stdout || '';
-                var firstNewline = content.indexOf('\n');
-
-                if (firstNewline >= 0)
-                    content = content.substring(firstNewline + 1);
-
-                return {
-                    changed: true,
-                    content: content
-                };
+            return self._fetchLogContent(stat).then(function (content) {
+                return { changed: true, content: content };
             });
         });
     },
@@ -293,9 +305,14 @@ return view.extend({
     renderLog: function (content) {
         content = content || '';
 
-        var lines = content.trim()
-            ? content.trim().split(/\r?\n/)
-            : [];
+        // 保留行内空白，仅移除首尾空行
+        var lines = content.split(/\r?\n/);
+
+        // 去掉首尾的空字符串（可能由开头或结尾的换行产生）
+        while (lines.length > 0 && lines[0] === '')
+            lines.shift();
+        while (lines.length > 0 && lines[lines.length - 1] === '')
+            lines.pop();
 
         if (lines.length > MAX_DISPLAY_LINES)
             lines = lines.slice(-MAX_DISPLAY_LINES);
@@ -328,15 +345,12 @@ return view.extend({
         var self = this;
         var logText = document.getElementById('log_textarea');
 
-        /* 页面已被切出（SPA 离场）或处于暂停/刷新中时，直接返回 NOOP Promise */
         if (!logText || self.isPaused || self.refreshInProgress)
             return Promise.resolve();
 
         self.refreshInProgress = true;
 
         return self.readLog().then(function (result) {
-            self.firstLoad = false;
-
             if (!result || result.changed === false)
                 return;
 
@@ -347,13 +361,9 @@ return view.extend({
             if (currentLogText) {
                 dom.content(
                     currentLogText,
-                    E(
-                        'pre',
-                        {},
-                        _('Unknown error: %s').format(
-                            err.message || err
-                        )
-                    )
+                    E('pre', {}, _('Unknown error: %s').format(
+                        err.message || err
+                    ))
                 );
             }
         }).finally(function () {
@@ -367,9 +377,8 @@ return view.extend({
         if (!window.confirm(_('Are you sure you want to clear the log file?')))
             return Promise.resolve();
 
-        /* 改用 LuCI 标准 fs.write 清空日志，遵循 ACL 并替代自定义 RPC */
         return fs.write(LOG_PATH, '').then(function () {
-            self.lastLogSize = 0;
+            self.lastLogSize  = 0;
             self.lastLogMtime = null;
             self.logEntriesCache = null;
 
@@ -378,6 +387,7 @@ return view.extend({
             if (logText)
                 dom.content(logText, E('pre', {}, ''));
 
+            // 清除后无需再发起 RPC，直接更新界面即可
             ui.addNotification(
                 null,
                 E('p', {}, _('Log cleared successfully.')),
@@ -386,19 +396,15 @@ return view.extend({
         }).catch(function (err) {
             ui.addNotification(
                 null,
-                E(
-                    'p',
-                    {},
-                    _('Failed to clear log: %s').format(
-                        err.message || err
-                    )
-                ),
+                E('p', {}, _('Failed to clear log: %s').format(
+                    err.message || err
+                )),
                 'error'
             );
         });
     },
 
-    render: function () {
+    render: function (initialContent) {
         var self = this;
 
         var css = E('style', {}, '\
@@ -505,7 +511,7 @@ return view.extend({
                 E(
                     'div',
                     { 'id': 'log_textarea' },
-                    E('pre', {}, _('Loading...'))
+                    E('pre', {}, '')
                 ),
 
                 E(
@@ -521,13 +527,38 @@ return view.extend({
             ])
         ]);
 
-        self.refreshLog();
+        // 初始渲染：如果加载出错则显示错误，否则渲染预取的内容
+        window.requestAnimationFrame(function () {
+            if (self.loadError) {
+                var logText = document.getElementById('log_textarea');
+                if (logText) {
+                    dom.content(
+                        logText,
+                        E('pre', {}, _('Failed to load log: %s').format(
+                            self.loadError.message || self.loadError
+                        ))
+                    );
+                }
+                return;
+            }
+            self.renderLog(initialContent);
+        });
 
-        poll.add(function () {
-            if (!document.getElementById('log_textarea'))
+        // 启动轮询，并保存句柄以便在视图销毁时移除
+        this._pollHandle = poll.add(function () {
+            var logText = document.getElementById('log_textarea');
+
+            // 如果 DOM 元素已不存在（视图切换），停止轮询
+            if (!logText) {
+                if (self._pollHandle) {
+                    self._pollHandle.remove();
+                    self._pollHandle = null;
+                }
                 return Promise.resolve();
+            }
+
             return self.refreshLog();
-        }, 5);
+        }, L.env.pollinterval);
 
         return E('div', {}, [
             css,
