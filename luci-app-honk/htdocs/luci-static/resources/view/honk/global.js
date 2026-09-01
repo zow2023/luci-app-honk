@@ -7,13 +7,6 @@
 'require ui';
 'require view';
 
-var callFileWrite = rpc.declare({
-    object: 'file',
-    method: 'write',
-    params: ['path', 'data'],
-    expect: { result: false }
-});
-
 var CONFIG_PATH = '/etc/honk/config.dae';
 
 return view.extend({
@@ -56,22 +49,28 @@ return view.extend({
             });
         }
 
-        return loadScript('/luci-static/resources/honk/lib/codemirror.js').then(function () {
-            return Promise.all([
-                loadScript('/luci-static/resources/honk/addon/edit/matchbrackets.js'),
-                loadScript('/luci-static/resources/honk/addon/fold/foldcode.js'),
-                loadScript('/luci-static/resources/honk/addon/fold/foldgutter.js'),
-                loadScript('/luci-static/resources/honk/addon/fold/indent-fold.js'),
-                loadScript('/luci-static/resources/honk/mode/dae/dae.js')
-            ]);
-        });
+        /* 链式串行加载，确保 CodeMirror 插件按依赖顺序执行（防止 foldgutter 抢先于 foldcode 加载报错） */
+        return loadScript('/luci-static/resources/honk/lib/codemirror.js')
+            .then(function () { return loadScript('/luci-static/resources/honk/addon/edit/matchbrackets.js'); })
+            .then(function () { return loadScript('/luci-static/resources/honk/addon/fold/foldcode.js'); })
+            .then(function () { return loadScript('/luci-static/resources/honk/addon/fold/foldgutter.js'); })
+            .then(function () { return loadScript('/luci-static/resources/honk/addon/fold/indent-fold.js'); })
+            .then(function () { return loadScript('/luci-static/resources/honk/mode/dae/dae.js'); });
     },
 
     mountEditor: function (content) {
         var self = this;
-        var textarea = document.getElementById('honk-config-editor');
 
         return self.loadAssets().then(function () {
+            /* 在 Promise 异步完成后获取 textarea，防止 DOM 尚未渲染导致 null 异常 */
+            var textarea = document.getElementById('honk-config-editor');
+            if (!textarea) return;
+
+            if (self.editorInstance) {
+                self.editorInstance.setValue(content || '');
+                return;
+            }
+
             self.editorInstance = CodeMirror.fromTextArea(textarea, {
                 mode: 'dae',
                 indentUnit: 4,
@@ -85,7 +84,8 @@ return view.extend({
             });
             self.editorInstance.setValue(content || '');
             window.setTimeout(function () {
-                self.editorInstance.refresh();
+                if (self.editorInstance)
+                    self.editorInstance.refresh();
             }, 100);
         });
     },
@@ -104,7 +104,12 @@ return view.extend({
                 line = line.replace(/\s*&&\s*/g, ' && ');
                 return line.replace(/\s+$/, '');
             });
-            editor.setValue(formatted.join('\n'));
+
+            /* 使用 replaceRange 替换文本，保留 CodeMirror 的撤销/重做 (Undo/Redo) 历史栈 */
+            var lastLine = editor.lineCount() - 1;
+            var lastChar = editor.getLine(lastLine).length;
+            editor.replaceRange(formatted.join('\n'), { line: 0, ch: 0 }, { line: lastLine, ch: lastChar });
+
             for (var i = 0; i < editor.lineCount(); i++)
                 editor.indentLine(i, 'smart');
             editor.setCursor(cursor);
@@ -112,7 +117,7 @@ return view.extend({
     },
 
     getEditorValue: function () {
-        return this.editorInstance ? this.editorInstance.getValue() : (document.getElementById('honk-config-editor') || {}).value || '';
+        return this.editorInstance ? this.editorInstance.getValue() : ((document.getElementById('honk-config-editor') || {}).value || '');
     },
 
     execServiceAction: function (action) {
@@ -146,19 +151,18 @@ return view.extend({
             return Promise.reject(new Error('Empty configuration'));
         }
 
-        return callFileWrite(CONFIG_PATH, content).then(function () {
+        /* 改用 LuCI 原生 fs 模块写文件，解决自定义 callFileWrite 可能引发的 ACL 权限异常 */
+        return fs.write(CONFIG_PATH, content).then(function () {
             if (!applyChanges) {
                 ui.addNotification(null, E('p', _('Configuration saved.')), 'info');
                 return null;
             }
-            return uci.apply().then(function () {
-                return self.handleReloadService();
-            });
+            return self.handleReloadService();
         }).catch(function (err) {
             ui.addNotification(null, E('p', _('Failed to save configuration: %s').format(err.message || err)), 'error');
             throw err;
         });
-    },
+     },
 
     handleSave: function () {
         return this.savePage(false);
@@ -194,7 +198,7 @@ return view.extend({
                 E('p', { 'class': 'hint' }, _('Correctly configure the include field for separate-config to work, or enter complete configuration here.')),
                 E('div', { 'class': 'honk-toolbar' }, [
                     E('button', { 'type': 'button', 'class': 'btn cbi-button cbi-button-neutral', 'click': function () { self.formatCode(); } }, _('Format Code')),
-                    E('button', { 'type': 'button', 'class': 'btn cbi-button cbi-button-apply', 'click': function () { self.savePage(true); } }, _('Reload Service'))
+                    E('button', { 'type': 'button', 'class': 'btn cbi-button cbi-button-apply', 'click': function () { self.savePage(true).catch(function () {}); } }, _('Reload Service'))
                 ]),
                 E('textarea', { 'id': 'honk-config-editor', 'style': 'width:100%;min-height:480px' }, content)
             ])
