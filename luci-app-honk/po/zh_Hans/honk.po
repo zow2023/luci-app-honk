@@ -70,6 +70,51 @@ msgstr "实时速率 (发送/接收)"
 msgid "Total Traffic (TX/RX)"
 msgstr "总流量 (发送/接收)"
 
+msgid "Subscription Update"
+msgstr "订阅更新"
+
+msgid "Enable Auto Subscribe Update"
+msgstr "启用自动订阅更新"
+
+msgid "Update Cycle"
+msgstr "更新周期"
+
+msgid "Every Day"
+msgstr "每天"
+
+msgid "Every Monday"
+msgstr "每周一"
+
+msgid "Every Tuesday"
+msgstr "每周二"
+
+msgid "Every Wednesday"
+msgstr "每周三"
+
+msgid "Every Thursday"
+msgstr "每周四"
+
+msgid "Every Friday"
+msgstr "每周五"
+
+msgid "Every Saturday"
+msgstr "每周六"
+
+msgid "Every Sunday"
+msgstr "每周日"
+
+msgid "Update Time (Every Day)"
+msgstr "更新时间（每天）"
+
+msgid "Save & Apply"
+msgstr "保存并应用"
+
+msgid "Subscription settings saved successfully."
+msgstr "订阅设置已成功保存。"
+
+msgid "Failed to save subscription settings: %s"
+msgstr "保存订阅设置失败：%s"
+
 # global.js
 msgid "Reloading..."
 msgstr "正在重新加载..."
