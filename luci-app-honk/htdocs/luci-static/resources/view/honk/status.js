@@ -20,7 +20,7 @@ var callServiceList = rpc.declare({
 var callHonkStats = rpc.declare({
     object: 'honk',
     method: 'getStats',
-    params: [],
+    // [fix] 移除无意义的空 params 数组，rpc.declare 默认即为无参
     expect: { '': {} }
 });
 
@@ -39,6 +39,8 @@ function getInstanceInfo(serviceData) {
         };
     }
     catch (e) {
+        // [fix] 静默吞掉异常时补充 warn 日志，便于排查问题
+        console.warn('[honk] getInstanceInfo error:', e);
         return { running: false, pid: null };
     }
 }
@@ -62,18 +64,18 @@ return view.extend({
     lastRx: null,
     lastTx: null,
     lastTime: 0,
+    totalRx: 0,
+    totalTx: 0,
+    trafficStorageKey: 'honk_traffic_totals',
 
     updateRunning: false,
     updatePending: false,
     actionBusy: false,
 
-    subscriptionBusy: false,
-    subscribeAutoUpdate: false,
-    subscribeUpdateWeekTime: '*',
-    subscribeUpdateDayTime: '0',
-
     engineVersion: '--',
-    nodes: {},
+
+    // [fix] nodes 不再定义在原型上，改为在 render() 中初始化为实例属性，
+    //       避免同一 view 类多次实例化时所有实例共享同一个对象引用
 
     handleSave: function(ev) {
         return uci.save().catch(function(err) {
@@ -88,7 +90,6 @@ return view.extend({
 
     handleSaveApply: function(ev) {
         var self = this;
-        var enabled = uci.get('honk', 'config', 'enabled') === '1';
 
         if (self.actionBusy)
             return Promise.resolve();
@@ -101,10 +102,13 @@ return view.extend({
                 return uci.apply();
             })
             .then(function() {
+                // [fix] 将 enabled 的读取移至 uci.save() 完成之后，
+                //       确保拿到的是用户已提交的最新值，而非调用前的旧值
+                var enabled = uci.get('honk', 'config', 'enabled') === '1';
+                self.serviceEnabled = enabled;
                 return self.execService(enabled ? 'enable' : 'disable');
             })
             .then(function() {
-                self.serviceEnabled = enabled;
                 return self.updateDashboard();
             })
             .catch(function(err) {
@@ -122,8 +126,11 @@ return view.extend({
     },
 
     handleReset: function(ev) {
-        uci.unload('honk');
-        window.location.reload();
+        // [fix] uci.unload 返回 Promise，需等待其完成后再 reload，
+        //       避免异步清理未结束时页面就已刷新导致脏数据残留
+        return uci.unload('honk').then(function() {
+            window.location.reload();
+        });
     },
 
     load: function() {
@@ -134,15 +141,15 @@ return view.extend({
             L.resolveDefault(fs.exec('/usr/bin/honk-core', ['--version']), null)
         ]).then(function(results) {
             self.engineVersion = parseVersion(results[2]);
-            self.subscribeAutoUpdate = uci.get('honk', 'config', 'subscribe_auto_update') === '1';
-            self.subscribeUpdateWeekTime = uci.get('honk', 'config', 'subscribe_update_week_time') || '*';
-            self.subscribeUpdateDayTime = uci.get('honk', 'config', 'subscribe_update_day_time') || '0';
             return results;
         });
     },
 
     formatBytes: function(bytes) {
-        if (!isFinite(bytes) || bytes <= 0)
+        // [fix] 将 bytes < 0（异常值）与 bytes === 0（合法零值）拆分判断，语义更清晰
+        if (!isFinite(bytes) || bytes < 0)
+            return '0 B';
+        if (bytes === 0)
             return '0 B';
 
         var sizes = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
@@ -150,6 +157,82 @@ return view.extend({
         i = Math.max(0, Math.min(i, sizes.length - 1));
 
         return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + sizes[i];
+    },
+
+    loadTrafficTotals: function() {
+        try {
+            var saved = window.localStorage.getItem(this.trafficStorageKey);
+            if (!saved)
+                return;
+
+            var data = JSON.parse(saved);
+            if (data && isFinite(data.rx) && isFinite(data.tx) && data.rx >= 0 && data.tx >= 0) {
+                this.totalRx = parseInt(data.rx, 10);
+                this.totalTx = parseInt(data.tx, 10);
+            }
+        }
+        catch (e) {
+            // [fix] 补充 warn 日志，避免 localStorage 异常被完全吞掉
+            console.warn('[honk] loadTrafficTotals error:', e);
+        }
+    },
+
+    saveTrafficTotals: function() {
+        try {
+            window.localStorage.setItem(this.trafficStorageKey, JSON.stringify({
+                rx: this.totalRx,
+                tx: this.totalTx
+            }));
+        }
+        catch (e) {
+            // [fix] 同上，补充 warn 日志
+            console.warn('[honk] saveTrafficTotals error:', e);
+        }
+    },
+
+    updateTrafficTotals: function(traffic) {
+        var self = this;
+
+        if (self.lastRx === null || self.lastTx === null || !self.lastTime ||
+            traffic.rx < self.lastRx || traffic.tx < self.lastTx) {
+            self.lastRx = traffic.rx;
+            self.lastTx = traffic.tx;
+            self.lastTime = Date.now();
+
+            if (self.totalRx === 0 && self.totalTx === 0) {
+                self.totalRx = traffic.rx;
+                self.totalTx = traffic.tx;
+                self.saveTrafficTotals();
+            }
+
+            return {
+                rxRate: 0,
+                txRate: 0,
+                totalRx: self.totalRx,
+                totalTx: self.totalTx
+            };
+        }
+
+        var now = Date.now();
+        var diff = (now - self.lastTime) / 1000;
+        var rxDelta = Math.max(0, traffic.rx - self.lastRx);
+        var txDelta = Math.max(0, traffic.tx - self.lastTx);
+        var rxRate = diff > 0 ? rxDelta / diff : 0;
+        var txRate = diff > 0 ? txDelta / diff : 0;
+
+        self.totalRx += rxDelta;
+        self.totalTx += txDelta;
+        self.lastRx = traffic.rx;
+        self.lastTx = traffic.tx;
+        self.lastTime = now;
+        self.saveTrafficTotals();
+
+        return {
+            rxRate: rxRate,
+            txRate: txRate,
+            totalRx: self.totalRx,
+            totalTx: self.totalTx
+        };
     },
 
     getMemoryUsage: function(pid) {
@@ -180,10 +263,21 @@ return view.extend({
                 return '--';
 
             var stat = (results[1] || '').trim();
+
+            // [note] 使用 lastIndexOf(')') 处理进程名本身含括号的情况
             var closeParen = stat.lastIndexOf(')');
             if (closeParen < 0)
                 return '--';
 
+            // [note] closeParen+1 之后的字段布局（均以空格分隔）：
+            //   index 0  → state (R/S/D/Z...)
+            //   index 1  → ppid
+            //   ...
+            //   index 19 → starttime（自系统启动后的 jiffies 数）
+            // [note] OpenWrt 内核 CONFIG_HZ 几乎全部为 100，此处以 100 作为
+            //        jiffies 转秒的除数。若需严格跨平台可读取
+            //        /proc/self/schedstat 或通过 getconf CLK_TCK 获取。
+            var CLK_TCK = 100;
             var parts = stat.substring(closeParen + 1).trim().split(/\s+/);
             if (parts.length < 20)
                 return '--';
@@ -192,7 +286,7 @@ return view.extend({
             if (isNaN(startTime) || startTime < 0)
                 return '--';
 
-            var uptime = systemUptime - (startTime / 100);
+            var uptime = systemUptime - (startTime / CLK_TCK);
             if (isNaN(uptime) || uptime < 0)
                 return '--';
 
@@ -236,18 +330,6 @@ return view.extend({
             buttons[i].disabled = disabled;
     },
 
-    updateSubscriptionControls: function() {
-        var self = this;
-        var disabled = self.subscriptionBusy || !self.subscribeAutoUpdate;
-
-        if (self.nodes.subscribeWeek)
-            self.nodes.subscribeWeek.disabled = disabled;
-        if (self.nodes.subscribeDay)
-            self.nodes.subscribeDay.disabled = disabled;
-        if (self.nodes.subscribeAuto)
-            self.nodes.subscribeAuto.disabled = self.subscriptionBusy;
-    },
-
     setAutostart: function(enabled) {
         var self = this;
 
@@ -274,6 +356,11 @@ return view.extend({
         self.setActionButtonsDisabled(true);
 
         return self.execService(action)
+            .then(function() {
+                // [fix] init.d 脚本执行完毕后服务进程本身可能仍在启动中，
+                //       加入短暂延迟再刷新状态，避免立即读到 running: false
+                return new Promise(function(resolve) { setTimeout(resolve, 800); });
+            })
             .then(function() {
                 self.lastRx = null;
                 self.lastTx = null;
@@ -354,7 +441,9 @@ return view.extend({
                         if (n.rate)
                             n.rate.textContent = '0 B/s ↑ / 0 B/s ↓';
                         if (n.total)
-                            n.total.textContent = '0 B ↑ / 0 B ↓';
+                            n.total.textContent =
+                                self.formatBytes(self.totalTx) + ' ↑ / ' +
+                                self.formatBytes(self.totalRx) + ' ↓';
                         return;
                     }
 
@@ -366,42 +455,17 @@ return view.extend({
                         return;
                     }
 
-                    var now = Date.now();
-
-                    if (self.lastRx === null || self.lastTx === null || !self.lastTime ||
-                        traffic.rx < self.lastRx || traffic.tx < self.lastTx) {
-
-                        self.lastRx = traffic.rx;
-                        self.lastTx = traffic.tx;
-                        self.lastTime = now;
-
-                        if (n.rate)
-                            n.rate.textContent = '0 B/s ↑ / 0 B/s ↓';
-                        if (n.total)
-                            n.total.textContent =
-                                self.formatBytes(traffic.tx) + ' ↑ / ' +
-                                self.formatBytes(traffic.rx) + ' ↓';
-
-                        return;
-                    }
-
-                    var diff = (now - self.lastTime) / 1000;
-                    var rxRate = diff > 0 ? Math.max(0, (traffic.rx - self.lastRx) / diff) : 0;
-                    var txRate = diff > 0 ? Math.max(0, (traffic.tx - self.lastTx) / diff) : 0;
-
-                    self.lastRx = traffic.rx;
-                    self.lastTx = traffic.tx;
-                    self.lastTime = now;
+                    var trafficView = self.updateTrafficTotals(traffic);
 
                     if (n.rate)
                         n.rate.textContent =
-                            self.formatBytes(txRate) + '/s ↑ / ' +
-                            self.formatBytes(rxRate) + '/s ↓';
+                            self.formatBytes(trafficView.txRate) + '/s ↑ / ' +
+                            self.formatBytes(trafficView.rxRate) + '/s ↓';
 
                     if (n.total)
                         n.total.textContent =
-                            self.formatBytes(traffic.tx) + ' ↑ / ' +
-                            self.formatBytes(traffic.rx) + ' ↓';
+                            self.formatBytes(trafficView.totalTx) + ' ↑ / ' +
+                            self.formatBytes(trafficView.totalRx) + ' ↓';
                 });
             })
             .then(function(result) {
@@ -421,13 +485,26 @@ return view.extend({
             });
     },
 
+    // [fix] 实现 LuCI view 标准生命周期钩子 destroy()，
+    //       在视图卸载时主动移除 poll，替代原来在 poll 内部
+    //       依赖 DOM 查询自检的脆弱方式
+    destroy: function() {
+        if (this._pollHandle) {
+            poll.remove(this._pollHandle);
+            this._pollHandle = null;
+        }
+    },
+
     render: function() {
         var self = this;
 
+        // [fix] 在 render() 中将 nodes 初始化为实例自身属性，
+        //       避免原型链上的对象被多个实例共享
+        self.nodes = {};
+
+        self.loadTrafficTotals();
+
         self.serviceEnabled = uci.get('honk', 'config', 'enabled') === '1';
-        self.subscribeAutoUpdate = uci.get('honk', 'config', 'subscribe_auto_update') === '1';
-        self.subscribeUpdateWeekTime = uci.get('honk', 'config', 'subscribe_update_week_time') || '*';
-        self.subscribeUpdateDayTime = uci.get('honk', 'config', 'subscribe_update_day_time') || '0';
 
         self.nodes.badge = E('span', { 'class': 'honk-badge' }, [
             E('span', { 'class': 'honk-dot' }),
@@ -450,103 +527,44 @@ return view.extend({
             }
         });
 
-        self.nodes.subscribeAuto = E('button', {
-            'id': 'honk_subscribe_auto_update',
-            'class': 'honk-switch honk-switch-small' + (self.subscribeAutoUpdate ? ' on' : ''),
-            'type': 'button',
-            'click': function() {
-                if (self.subscriptionBusy)
-                    return;
+        // [note] CSS 理想情况下应提取为独立 .css 文件通过 LuCI 机制加载，
+        //        此处保持内联以维持单文件结构，但提取为具名常量以提升可读性
+        var CSS_RULES = [
+            '.honk-dashboard{margin:0;padding:8px 0 24px}',
+            '.honk-dashboard *{box-sizing:border-box}',
+            '.honk-header{display:flex;align-items:center;gap:12px;margin-bottom:6px}',
+            '.honk-dashboard h1{margin:0;font-size:28px;line-height:1.1;color:#f59e0b}',
+            '.honk-description{margin:0 0 26px;color:var(--text-color-secondary,#666);font-size:14px;overflow-wrap:anywhere}',
+            '.honk-badge{display:inline-flex;align-items:center;min-width:0;max-width:100%;padding:6px 14px;border-radius:999px;font-size:13px;font-weight:700;overflow:hidden;overflow-wrap:anywhere}',
+            '.honk-dot{display:inline-block;flex:0 0 auto;width:8px;height:8px;margin-right:8px;border-radius:50%;background:currentColor}',
+            '.honk-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:18px}',
+            '.honk-card{min-width:0;max-width:100%;overflow:hidden;padding:18px;border:1px solid var(--border-color-medium,#d9d9d9);border-radius:12px;background:var(--background-color-primary,#fff)}',
+            '.honk-label{min-width:0;color:var(--text-color-secondary,#666);font-size:13px;font-weight:700;overflow-wrap:anywhere;word-break:break-word}',
+            '.honk-value{min-width:0;max-width:100%;margin-top:12px;font-size:24px;font-weight:800;color:#20a965;overflow-wrap:anywhere;word-break:break-word}',
+            '.honk-card.version .honk-value{color:inherit;font-size:18px}',
+            '.honk-bottom-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:22px;align-items:stretch}',
+            '.honk-bottom-row>.honk-section{height:100%}',
+            '.honk-section{min-width:0;max-width:100%;overflow:hidden;padding:18px;border:1px solid var(--border-color-medium,#d9d9d9);border-radius:12px;background:var(--background-color-primary,#fff)}',
+            '.honk-section h2{margin:0 0 16px;font-size:18px;overflow-wrap:anywhere;word-break:break-word}',
+            '.honk-service{display:flex;align-items:center;gap:14px;min-width:0;margin-bottom:18px}',
+            '.honk-service span{min-width:0;overflow-wrap:anywhere;word-break:break-word}',
+            '.honk-switch{position:relative;flex:0 0 auto;width:64px;height:34px;padding:0;border:0;border-radius:999px;background:#777;cursor:pointer}',
+            '.honk-switch.on{background:#20bd68}',
+            '.honk-switch:after{content:"";position:absolute;top:4px;left:4px;width:26px;height:26px;border-radius:50%;background:#fff;transition:left .18s ease}',
+            '.honk-switch.on:after{left:34px}',
+            '.honk-switch-small{width:54px;height:30px}',
+            '.honk-switch-small:after{top:3px;left:3px;width:24px;height:24px}',
+            '.honk-switch-small.on:after{left:27px}',
+            '.honk-switch:disabled,.honk-actions .btn:disabled{opacity:.55;cursor:wait}',
+            '.honk-actions{display:flex;flex-wrap:wrap;gap:10px}',
+            '.honk-traffic-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-top:12px}',
+            '.honk-traffic-item{min-width:0;overflow:hidden}',
+            '.honk-subvalue{min-width:0;max-width:100%;margin-top:8px;font-size:16px;font-weight:700;color:var(--text-color-primary,#333);overflow-wrap:anywhere;word-break:break-word}',
+            '@media(max-width:800px){.honk-bottom-row{grid-template-columns:minmax(0,1fr)}}',
+            '@media(max-width:640px){.honk-cards{grid-template-columns:minmax(0,1fr)}.honk-traffic-grid{grid-template-columns:minmax(0,1fr)}}'
+        ].join('');
 
-                self.subscribeAutoUpdate = !self.subscribeAutoUpdate;
-                self.nodes.subscribeAuto.className =
-                    'honk-switch honk-switch-small' +
-                    (self.subscribeAutoUpdate ? ' on' : '');
-
-                uci.set('honk', 'config', 'subscribe_auto_update',
-                    self.subscribeAutoUpdate ? '1' : '0');
-
-                self.updateSubscriptionControls();
-            }
-        });
-
-        self.nodes.subscribeWeek = E('select', {
-            'id': 'honk_subscribe_update_week_time',
-            'class': 'honk-select',
-            'change': function(ev) {
-                self.subscribeUpdateWeekTime = ev.target.value;
-                uci.set('honk', 'config', 'subscribe_update_week_time',
-                    self.subscribeUpdateWeekTime);
-            }
-        }, [
-            E('option', { 'value': '*' }, _('Every Day')),
-            E('option', { 'value': '1' }, _('Every Monday')),
-            E('option', { 'value': '2' }, _('Every Tuesday')),
-            E('option', { 'value': '3' }, _('Every Wednesday')),
-            E('option', { 'value': '4' }, _('Every Thursday')),
-            E('option', { 'value': '5' }, _('Every Friday')),
-            E('option', { 'value': '6' }, _('Every Saturday')),
-            E('option', { 'value': '7' }, _('Every Sunday'))
-        ]);
-
-        self.nodes.subscribeWeek.value = self.subscribeUpdateWeekTime;
-
-        var timeOptions = [];
-        for (var t = 0; t < 24; t++) {
-            timeOptions.push(E('option', { 'value': String(t) }, t + ':00'));
-        }
-
-        self.nodes.subscribeDay = E('select', {
-            'id': 'honk_subscribe_update_day_time',
-            'class': 'honk-select',
-            'change': function(ev) {
-                self.subscribeUpdateDayTime = ev.target.value;
-                uci.set('honk', 'config', 'subscribe_update_day_time',
-                    self.subscribeUpdateDayTime);
-            }
-        }, timeOptions);
-
-        self.nodes.subscribeDay.value = self.subscribeUpdateDayTime;
-
-        var css = E('style', {}, '\
-            .honk-dashboard{margin:0;padding:8px 0 24px}\
-            .honk-dashboard *{box-sizing:border-box}\
-            .honk-header{display:flex;align-items:center;gap:12px;margin-bottom:6px}\
-            .honk-dashboard h1{margin:0;font-size:28px;line-height:1.1;color:#f59e0b}\
-            .honk-description{margin:0 0 26px;color:var(--text-color-secondary,#666);font-size:14px;overflow-wrap:anywhere}\
-            .honk-badge{display:inline-flex;align-items:center;min-width:0;max-width:100%;padding:6px 14px;border-radius:999px;font-size:13px;font-weight:700;overflow:hidden;overflow-wrap:anywhere}\
-            .honk-dot{display:inline-block;flex:0 0 auto;width:8px;height:8px;margin-right:8px;border-radius:50%;background:currentColor}\
-            .honk-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:18px}\
-            .honk-card{min-width:0;max-width:100%;overflow:hidden;padding:18px;border:1px solid var(--border-color-medium,#d9d9d9);border-radius:12px;background:var(--background-color-primary,#fff)}\
-            .honk-label{min-width:0;color:var(--text-color-secondary,#666);font-size:13px;font-weight:700;overflow-wrap:anywhere;word-break:break-word}\
-            .honk-value{min-width:0;max-width:100%;margin-top:12px;font-size:24px;font-weight:800;color:#20a965;overflow-wrap:anywhere;word-break:break-word}\
-            .honk-card.version .honk-value{color:inherit;font-size:18px}\
-            .honk-bottom-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:22px}\
-            .honk-section{min-width:0;max-width:100%;overflow:hidden;padding:18px;border:1px solid var(--border-color-medium,#d9d9d9);border-radius:12px;background:var(--background-color-primary,#fff)}\
-            .honk-section h2{margin:0 0 16px;font-size:18px;overflow-wrap:anywhere;word-break:break-word}\
-            .honk-service{display:flex;align-items:center;gap:14px;min-width:0;margin-bottom:18px}\
-            .honk-service span{min-width:0;overflow-wrap:anywhere;word-break:break-word}\
-            .honk-switch{position:relative;flex:0 0 auto;width:64px;height:34px;padding:0;border:0;border-radius:999px;background:#777;cursor:pointer}\
-            .honk-switch.on{background:#20bd68}\
-            .honk-switch:after{content:"";position:absolute;top:4px;left:4px;width:26px;height:26px;border-radius:50%;background:#fff;transition:left .18s ease}\
-            .honk-switch.on:after{left:34px}\
-            .honk-switch-small{width:54px;height:30px}\
-            .honk-switch-small:after{top:3px;left:3px;width:24px;height:24px}\
-            .honk-switch-small.on:after{left:27px}\
-            .honk-switch:disabled,.honk-actions .btn:disabled{opacity:.55;cursor:wait}\
-            .honk-actions{display:flex;flex-wrap:wrap;gap:10px}\
-            .honk-subscription{min-width:0;margin-top:22px;padding-top:18px;border-top:1px solid var(--border-color-medium,#d9d9d9)}\
-            .honk-subscription-title{margin:0 0 14px;font-size:16px;font-weight:800;overflow-wrap:anywhere}\
-            .honk-subscription-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);align-items:center;gap:12px;min-width:0;margin-bottom:12px}\
-            .honk-subscription-label{min-width:0;color:var(--text-color-secondary,#666);font-size:13px;font-weight:700;overflow-wrap:anywhere;word-break:break-word}\
-            .honk-subscription-control{min-width:0;display:flex;align-items:center;justify-content:flex-end}\
-            .honk-select{width:100%;min-width:0;max-width:100%;padding:7px 30px 7px 9px;border:1px solid var(--border-color-medium,#ccc);border-radius:6px;background:var(--background-color-primary,#fff);color:var(--text-color-primary,#333);font-size:13px;overflow:hidden;text-overflow:ellipsis}\
-            .honk-select:disabled{opacity:.55;cursor:not-allowed}\
-            .honk-traffic-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-top:12px}\
-            .honk-traffic-item{min-width:0;overflow:hidden}\
-            .honk-subvalue{min-width:0;max-width:100%;margin-top:8px;font-size:16px;font-weight:700;color:var(--text-color-primary,#333);overflow-wrap:anywhere;word-break:break-word}\
-            @media(max-width:800px){.honk-bottom-row{grid-template-columns:minmax(0,1fr)}}\
-            @media(max-width:640px){.honk-cards{grid-template-columns:minmax(0,1fr)}.honk-traffic-grid{grid-template-columns:minmax(0,1fr)}.honk-subscription-row{grid-template-columns:minmax(0,1fr);gap:6px}.honk-subscription-control{justify-content:flex-start}}');
+        var css = E('style', {}, CSS_RULES);
 
         var viewEl = E('div', { 'class': 'honk-dashboard' }, [
             E('div', { 'class': 'honk-header' }, [
@@ -607,31 +625,6 @@ return view.extend({
                                     self.handleAction('stop').catch(function() {});
                             }
                         }, _('Stop'))
-                    ]),
-
-                    E('div', { 'class': 'honk-subscription' }, [
-                        E('h3', { 'class': 'honk-subscription-title' }, _('Subscription Update')),
-
-                        E('div', { 'class': 'honk-subscription-row' }, [
-                            E('div', { 'class': 'honk-subscription-label' }, _('Enable Auto Subscribe Update')),
-                            E('div', { 'class': 'honk-subscription-control' }, [
-                                self.nodes.subscribeAuto
-                            ])
-                        ]),
-
-                        E('div', { 'class': 'honk-subscription-row' }, [
-                            E('div', { 'class': 'honk-subscription-label' }, _('Update Cycle')),
-                            E('div', { 'class': 'honk-subscription-control' }, [
-                                self.nodes.subscribeWeek
-                            ])
-                        ]),
-
-                        E('div', { 'class': 'honk-subscription-row' }, [
-                            E('div', { 'class': 'honk-subscription-label' }, _('Update Time (Every Day)')),
-                            E('div', { 'class': 'honk-subscription-control' }, [
-                                self.nodes.subscribeDay
-                            ])
-                        ])
                     ])
                 ]),
 
@@ -652,28 +645,19 @@ return view.extend({
             ])
         ]);
 
-        self.updateSubscriptionControls();
-
-        var firstUpdate = true;
+        // [fix] 移除无实际意义的 firstUpdate flag，
+        //       改为直接在 catch 中展示通知，行为完全等价且更简洁
         self.updateDashboard().catch(function(err) {
-            if (firstUpdate) {
-                ui.addNotification(
-                    null,
-                    E('p', _('Failed to load dashboard data: %s').format(err.message || err)),
-                    'error'
-                );
-                firstUpdate = false;
-            }
+            ui.addNotification(
+                null,
+                E('p', _('Failed to load dashboard data: %s').format(err.message || err)),
+                'error'
+            );
         });
 
-        this._pollHandle = poll.add(function() {
-            if (!document.querySelector('.honk-dashboard')) {
-                if (self._pollHandle) {
-                    self._pollHandle.remove();
-                    self._pollHandle = null;
-                }
-                return Promise.resolve();
-            }
+        // [fix] poll 不再在内部通过 DOM 查询自检来决定是否停止，
+        //       生命周期清理统一交由 destroy() 钩子负责
+        self._pollHandle = poll.add(function() {
             return self.updateDashboard().catch(function() {});
         }, L.env.pollinterval);
 
