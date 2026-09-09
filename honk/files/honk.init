@@ -4,135 +4,466 @@ USE_PROCD=1
 START=96
 STOP=10
 
-EXTRA_COMMANDS="hot_reload"
-EXTRA_HELP="        hot_reload  Reload service (forces a clean restart; upstream honk reload logic is not yet reviewed)"
+extra_command "hot_reload" "Hot-reload honk-core via SIGHUP; restart is required for process-level settings"
+extra_command "lock_status" "Show honk-core instance lock and service status"
 
 CONF="honk"
 PROG="/usr/bin/honk-core"
+
+# honk-core owns this lock itself.
+# It is a process-wide mutex for the real datapath and also stores the PID
+# used by `honk-core reload`.
+LOCK_FILE="/run/honk-core.lock"
+
+# honk-core currently uses these fixed datapath resource names.
 HONK_HOST_IFACE="dae0"
 HONK_PEER_IFACE="dae0peer"
 HONK_NETNS_NAME="daens"
 HONK_NETNS_PATH="/run/netns/$HONK_NETNS_NAME"
+
+# Private bind-mount source used while honk is running.
 RESOLV_HONK="/tmp/resolv.conf.honk"
+
+# How long to wait after sending SIGHUP before looking for the
+# applied/rejected verdict in the runtime log (hot_reload only).
+HOT_RELOAD_VERDICT_WAIT=2
+
+log() {
+    logger -t honk "$*"
+}
 
 set_chmod_640() {
     mkdir -p /etc/honk/config.d
+
+    # X means:
+    #   directories -> keep execute/search bit
+    #   regular files -> do not add execute bit
+    #
+    # Result:
+    #   dirs: 750 / 740-like depending on existing special bits
+    #   files: 640
+    #
+    # Never use "chmod -R 640": that removes directory traversal bits.
     chmod -R u=rwX,g=rX,o= /etc/honk/ 2>/dev/null || true
 }
 
+# Resolve the real path behind /tmp/resolv.conf.
+#
+# OpenWrt commonly has:
+#   /tmp/resolv.conf -> /tmp/resolv.conf.d/resolv.conf.auto
+#
+# Mounting /tmp/resolv.conf itself is therefore not always the right thing
+# to inspect. readlink -f resolves the real target when possible.
+resolv_target() {
+    local p="/tmp/resolv.conf"
+
+    if [ -L "$p" ]; then
+        p="$(readlink -f "$p" 2>/dev/null)"
+    fi
+
+    printf '%s' "${p:-/tmp/resolv.conf}"
+}
+
+# Print the source of a mount whose target is $1.
+# Empty output means that target is not a mount point.
+mount_source_of() {
+    awk -v t="$1" '$2 == t { print $1; exit }' /proc/mounts
+}
+
+# Probe whether the upstream lock is actually held right now.
+#
+# Exit codes:
+#   0 -> lock is held by a running honk-core
+#   1 -> lock file exists but nobody holds the flock (leftover)
+#   2 -> lock file does not exist
+#
+# The fd is opened read-only, so probing never creates or modifies the
+# lock file. flock(2) semantics: acquiring an exclusive lock on an fd
+# succeeds immediately only when no other process holds it.
+lock_held() {
+    [ -e "$LOCK_FILE" ] || return 2
+
+    (
+        exec 3<"$LOCK_FILE" 2>/dev/null || exit 1
+
+        if flock -n 3 2>/dev/null; then
+            exit 1    # we got the lock -> it was NOT held
+        fi
+
+        exit 0        # EWOULDBLOCK -> someone holds it
+    )
+}
+
+# Best-effort cleanup for leftovers after an abnormal exit.
+#
+# IMPORTANT:
+# This is intentionally NOT called before normal startup.
+#
+# honk-core itself owns the datapath lifecycle and the process-wide lock.
+# If the old instance is still draining, deleting fixed datapath resources
+# here would create exactly the restart race the upstream lock is designed
+# to prevent.
+#
+# service_stopped() is only reached after procd has observed this service
+# instance exit, so this cleanup is safe as a final residue sweep.
 cleanup_netns() {
-    ip netns del "$HONK_NETNS_NAME" 2>/dev/null || true
-    umount "$HONK_NETNS_PATH" 2>/dev/null || true
-    rm -f "$HONK_NETNS_PATH" 2>/dev/null || true
+    # Remove possible TC clsact left behind by an interrupted shutdown.
+    tc qdisc del dev "$HONK_HOST_IFACE" clsact 2>/dev/null || true
+
+    # Remove fixed datapath resources if they survived a crash/SIGKILL.
     ip link del "$HONK_HOST_IFACE" 2>/dev/null || true
     ip link del "$HONK_PEER_IFACE" 2>/dev/null || true
+
+    ip netns del "$HONK_NETNS_NAME" 2>/dev/null || true
+
+    # OpenWrt may leave the namespace bind mount behind after `ip netns del`
+    # in some failure cases.
+    umount "$HONK_NETNS_PATH" 2>/dev/null || true
+    rm -f "$HONK_NETNS_PATH" 2>/dev/null || true
+
+    # DO NOT remove $LOCK_FILE here.
+    #
+    # The lock file is honk-core's own IPC/mutex object. File existence is not
+    # the locking primitive; the kernel flock held by honk-core is.
 }
 
 hijack_resolv_conf() {
-    grep -q ' /tmp/resolv\.conf ' /proc/mounts && return 0
+    local target src
+    target="$(resolv_target)"
 
-    grep -E '^(search|domain) ' /tmp/resolv.conf > "$RESOLV_HONK" 2>/dev/null
+    # Already mounted: distinguish our own mount from somebody else's.
+    src="$(mount_source_of "$target")"
+
+    # Idempotent: our previous bind mount is already in place.
+    [ "$src" = "$RESOLV_HONK" ] && return 0
+
+    # Another service owns this mount point.
+    # Do not overwrite or unmount somebody else's DNS setup.
+    if [ -n "$src" ]; then
+        log "hijack_resolv_conf: $target already mounted by $src, skipping"
+        return 1
+    fi
+
+    # Preserve search/domain lines from the original resolver config.
+    grep -E '^(search|domain) ' "$target" > "$RESOLV_HONK" 2>/dev/null || true
 
     local dns_list LOGICAL_WAN
     . /lib/functions/network.sh
+
     network_find_wan LOGICAL_WAN 2>/dev/null
+
     if [ -n "$LOGICAL_WAN" ]; then
-        dns_list=$(ubus call "network.interface.$LOGICAL_WAN" status 2>/dev/null | \
-            jsonfilter -e '@["dns-server"][*]' 2>/dev/null)
+        dns_list="$(
+            ubus call "network.interface.$LOGICAL_WAN" status 2>/dev/null |
+            jsonfilter -e '@["dns-server"][*]' 2>/dev/null
+        )"
     fi
 
-    if [ -z "$dns_list" ] && [ -f "/tmp/resolv.conf.d/resolv.conf.auto" ]; then
-        dns_list=$(awk '/^nameserver/{print $2}' "/tmp/resolv.conf.d/resolv.conf.auto")
+    # Fallback to OpenWrt's generated resolver config.
+    if [ -z "$dns_list" ] &&
+       [ -f "/tmp/resolv.conf.d/resolv.conf.auto" ]; then
+        dns_list="$(
+            awk '/^nameserver[[:space:]]+/{print $2}' \
+                "/tmp/resolv.conf.d/resolv.conf.auto"
+        )"
     fi
 
-    local added=0
+    local added=0 dns
+
     for dns in $dns_list; do
+        # Accept IPv4 / IPv6 / scoped IPv6-ish resolver addresses.
+        # Reject anything containing unexpected characters.
         case "$dns" in
-            *[!0-9a-fA-F:.%]*|'') continue ;;
+            *[!0-9a-fA-F:.%]*|'')
+                continue
+                ;;
         esac
+
         echo "nameserver $dns" >> "$RESOLV_HONK"
         added=1
     done
 
+    # Last-resort bootstrap resolvers.
+    #
+    # These are only used if neither UCI/WAN status nor
+    # resolv.conf.auto supplied a usable nameserver.
     if [ "$added" -eq 0 ]; then
         echo "nameserver 119.29.29.29" >> "$RESOLV_HONK"
         echo "nameserver 223.5.5.5" >> "$RESOLV_HONK"
     fi
 
-    mount --bind "$RESOLV_HONK" /tmp/resolv.conf
-    mount -o remount,ro,bind /tmp/resolv.conf
+    mount --bind "$RESOLV_HONK" "$target" || {
+        log "hijack_resolv_conf: bind mount failed for $target"
+        rm -f "$RESOLV_HONK"
+        return 1
+    }
+
+    # Keep the temporary resolver read-only while honk is running.
+    mount -o remount,ro,bind "$target" || {
+        log "hijack_resolv_conf: ro remount failed for $target, rolling back"
+        umount "$target" 2>/dev/null || true
+        rm -f "$RESOLV_HONK"
+        return 1
+    }
+
+    return 0
 }
 
 restore_resolv_conf() {
-    grep -q ' /tmp/resolv\.conf ' /proc/mounts || return 0
-    umount /tmp/resolv.conf 2>/dev/null
-    rm -f "$RESOLV_HONK"
+    local target
+    target="$(resolv_target)"
+
+    # Only unmount the mount created by this init script.
+    #
+    # Never do a blind `umount "$target"` here because another service may
+    # have taken ownership after honk started.
+    if [ "$(mount_source_of "$target")" != "$RESOLV_HONK" ]; then
+        rm -f "$RESOLV_HONK" 2>/dev/null || true
+        return 0
+    fi
+
+    # Restore writeability of the bind mount before unmounting it.
+    mount -o remount,rw,bind "$target" 2>/dev/null || true
+    umount "$target" 2>/dev/null || true
+
+    rm -f "$RESOLV_HONK" 2>/dev/null || true
 }
 
 start_service() {
     local enabled config_file
 
     config_load "$CONF"
+
     config_get_bool enabled "config" "enabled" "0"
-    logger -t honk "start_service: enabled=$enabled"
 
     [ "$enabled" -eq "1" ] || {
-        logger -t honk "start_service: disabled, not starting"
+        log "start_service: disabled by configuration"
         return 1
     }
 
     [ -x "$PROG" ] || {
-        logger -t honk "start_service: $PROG not found or not executable"
+        log "start_service: $PROG missing or not executable"
         return 1
     }
 
     config_get config_file "config" "config_file" "/etc/honk/config.dae"
 
+    [ -r "$config_file" ] || {
+        log "start_service: config file $config_file not readable"
+        return 1
+    }
+
     set_chmod_640
     mkdir -p /var/log/honk
-    cleanup_netns
-    hijack_resolv_conf
+
+    #
+    # DO NOT call cleanup_netns here.
+    #
+    # honk-core's own /run/honk-core.lock is the authoritative datapath
+    # singleton guard. Its shutdown path also drains active state before
+    # releasing the lock. Preemptively deleting dae0/daens here can race with
+    # a still-draining instance.
+    #
+
+    # DNS takeover is outside honk-core's own datapath lock, so do this
+    # before spawning the process. Failure is logged, but does not prevent
+    # honk itself from starting because the runtime has its own bootstrap
+    # resolver support.
+    if ! hijack_resolv_conf; then
+        log "start_service: resolver hijack unavailable; continuing"
+    fi
 
     local tz_value
     tz_value="$(cat /etc/TZ 2>/dev/null)"
 
     procd_open_instance "$CONF"
-    [ -n "$tz_value" ] && procd_set_param env TZ="$tz_value"
+
+    [ -n "$tz_value" ] && \
+        procd_set_param env TZ="$tz_value"
+
+    # geoip.dat / geosite.dat asset lookup support.
     procd_set_param env DAE_LOCATION_ASSET="/usr/share/v2ray"
+
     procd_set_param command "$PROG" --config "$config_file"
-    procd_set_param netdev "$HONK_HOST_IFACE" "$HONK_PEER_IFACE"
+
+    # Restart when the actual command-line config file changes.
+    # This is important because a number of honk global settings are
+    # explicitly restart-required by upstream.
+    procd_set_param file "$config_file"
+
+    # Fixed datapath devices owned by real honk-core.
+    procd_set_param netdev \
+        "$HONK_HOST_IFACE" \
+        "$HONK_PEER_IFACE"
+
+    # honk-core raises RLIMIT_NOFILE itself where possible, but setting a
+    # sufficient service-side ceiling is still useful on OpenWrt.
     procd_set_param limits core="unlimited"
     procd_set_param limits nofile="1000000 1000000"
-    procd_set_param term_timeout 8
+
+    # IMPORTANT:
+    # Upstream shutdown closes datapath admission first, then fences
+    # NFQUEUE and tears down hooks/links. A busy gateway can take clearly
+    # longer than the old 8/15s values, but blocking every restart for
+    # up to 120s hurts operational responsiveness.
+    #
+    # 60s gives roughly an order of magnitude of headroom over a normal
+    # (seconds-scale) drain while keeping the worst-case stop/restart
+    # latency tolerable. Raise to 90-120 only if you routinely observe
+    # drain times in the tens of seconds under heavy load.
+    procd_set_param term_timeout 60
+
+    # If honk exits unexpectedly, let procd restart it.
     procd_set_param respawn 3600 5 5
+
+    # Send runtime logs to logread/procd.
     procd_set_param stdout 1
     procd_set_param stderr 1
+
     procd_close_instance
 
-    logger -t honk "start_service: honk-core launched"
+    log "start_service: honk-core requested (config: $config_file)"
 }
 
 service_stopped() {
-    logger -t honk "service_stopped: cleaning up"
+    #
+    # This is a post-exit cleanup path, not a startup pre-clean.
+    #
+    # By this point procd has observed the instance exit. honk-core should
+    # normally have already released its datapath resources itself. These
+    # commands merely sweep crash leftovers.
+    #
+    log "service_stopped: restoring resolver and sweeping datapath leftovers"
+
     restore_resolv_conf
     cleanup_netns
 }
 
+# OpenWrt/UCI reload semantics:
+#
+# A configuration reload must be a CLEAN RESTART.
+#
+# honk-core supports native SIGHUP reload, but upstream explicitly marks
+# process-level settings (e.g. interface set, TPROXY port, NFQUEUE mode,
+# data_dir, etc.) as restart-required.
+#
+# Therefore:
+#   /etc/init.d/honk reload
+#       -> restart
+#
+# Explicit users who want native SIGHUP semantics can call:
+#   /etc/init.d/honk hot_reload
 reload_service() {
-    hot_reload
+    restart
 }
 
 service_triggers() {
     procd_add_reload_trigger "$CONF"
 }
 
+# Wait briefly after SIGHUP, then look for the latest applied/rejected
+# verdict line in the runtime log (procd routes stdout/stderr to syslog,
+# so logread sees honk-core output).
+#
+# This is informational only: the authoritative verdict is the runtime
+# log itself, and a missing verdict (slow reload, log rotation, or an
+# unrecognized log format) is never treated as failure.
+report_reload_verdict() {
+    sleep "$HOT_RELOAD_VERDICT_WAIT"
+
+    local verdict
+    verdict="$(
+        logread 2>/dev/null |
+        grep -i 'honk' |
+        grep -iE '(^|[^a-z])(applied|rejected)([^a-z]|$)' |
+        tail -n 1
+    )"
+
+    if [ -n "$verdict" ]; then
+        log "hot_reload: verdict: $verdict"
+        echo "honk hot_reload verdict: $verdict"
+    else
+        log "hot_reload: no applied/rejected line seen yet; check the runtime log manually"
+        echo "honk hot_reload: no verdict line found in logread yet, verify manually"
+    fi
+}
+
+#
+# Native upstream hot reload.
+#
+# `honk-core reload`:
+#   1. opens /run/honk-core.lock
+#   2. verifies that another process actually holds the flock
+#   3. reads its PID
+#   4. sends SIGHUP
+#
+# The command's success only means the signal was delivered. The running
+# process subsequently records whether the new runtime configuration was
+# applied or rejected.
+#
+# If the native command cannot reach a running instance, fall back to a full
+# restart so `hot_reload` remains operational as an administration command.
+#
 hot_reload() {
     set_chmod_640
-    if /etc/init.d/honk running; then
-        logger -t honk "hot_reload: upstream honk-core reload path is unreviewed and may leak eBPF/nftables resources; performing full restart instead"
-        restart
-    else
-        logger -t honk "hot_reload: service not running, starting"
+
+    if ! /etc/init.d/honk running; then
+        log "hot_reload: service not running, starting"
         start
+        return $?
+    fi
+
+    log "hot_reload: requesting native honk-core reload"
+
+    if "$PROG" reload >/dev/null 2>&1; then
+        log "hot_reload: SIGHUP delivered; checking for verdict"
+        report_reload_verdict
+        return 0
+    fi
+
+    log "hot_reload: native reload failed, falling back to full restart"
+    restart
+}
+
+#
+# Operational lock status.
+#
+# IMPORTANT:
+# /run/honk-core.lock being present does NOT by itself mean another instance
+# is running. The actual singleton primitive is the kernel flock held by
+# honk-core, while the file contents contain the PID.
+#
+# We probe the flock directly (read-only, never creating the file) and show
+# both the file contents and the procd service state, so a crash leftover
+# is distinguishable from a live lock at a glance.
+#
+lock_status() {
+    echo "lock file: $LOCK_FILE"
+
+    if [ -e "$LOCK_FILE" ]; then
+        echo "lock file state: present"
+
+        if [ -s "$LOCK_FILE" ]; then
+            printf "lock PID: "
+            cat "$LOCK_FILE" 2>/dev/null || true
+        else
+            echo "lock PID: empty"
+        fi
+    else
+        echo "lock file state: absent"
+    fi
+
+    if lock_held; then
+        echo "lock state: HELD by a running honk-core"
+    elif [ $? -eq 2 ]; then
+        echo "lock state: no lock file"
+    else
+        echo "lock state: NOT held (lock file is a crash leftover; honk-core will reuse it)"
+    fi
+
+    if /etc/init.d/honk running; then
+        echo "service: running"
+    else
+        echo "service: stopped"
     fi
 }
