@@ -47,15 +47,14 @@ set_chmod_640() {
     chmod -R u=rwX,g=rX,o= /etc/honk/ 2>/dev/null || true
 }
 
-# Resolve the real path behind /tmp/resolv.conf.
+# Resolve the real path behind /etc/resolv.conf.
 #
 # OpenWrt commonly has:
-#   /tmp/resolv.conf -> /tmp/resolv.conf.d/resolv.conf.auto
+#   /etc/resolv.conf -> /tmp/resolv.conf
 #
-# Mounting /tmp/resolv.conf itself is therefore not always the right thing
-# to inspect. readlink -f resolves the real target when possible.
+# readlink -f resolves the real target when possible.
 resolv_target() {
-    local p="/tmp/resolv.conf"
+    local p="/etc/resolv.conf"
 
     if [ -L "$p" ]; then
         p="$(readlink -f "$p" 2>/dev/null)"
@@ -64,10 +63,33 @@ resolv_target() {
     printf '%s' "${p:-/tmp/resolv.conf}"
 }
 
-# Print the source of a mount whose target is $1.
-# Empty output means that target is not a mount point.
-mount_source_of() {
-    awk -v t="$1" '$2 == t { print $1; exit }' /proc/mounts
+is_mount_target() {
+    local target="$1"
+    awk -v t="$target" '$2 == t { found=1 } END { exit(found ? 0 : 1) }' /proc/mounts
+}
+
+is_bind_mounted_from() {
+    local source="$1"
+    local target="$2"
+    local base
+    base="$(basename "$source")"
+    # /proc/self/mountinfo 第4列(root)是 bind 源文件相对其所在文件系统根的路径：
+    # /tmp 为 tmpfs 时 /tmp/resolv.conf.honk 显示为 /resolv.conf.honk，
+    # 在 overlay 根上则显示完整路径；两种形态都以 "/<basename>" 结尾。
+    # 注意：不能与第4列做绝对路径全等比较，也不能用 /proc/mounts 的 source 字段
+    # （tmpfs 上文件 bind mount 的 source 显示为文件系统名 "tmpfs"）。
+    # bind 源文件在挂载存续期间被删除时，内核会在 root 字段尾部追加
+    # "//deleted"（或 " (deleted)"，随内核而异），需剥离后再比较，
+    # 否则这类孤儿挂载会被误判为外来挂载而永远得不到清理。
+    awk -v t="$target" -v b="$base" '
+        $5 == t {
+            root = $4
+            sub(/\/\/deleted$/, "", root)
+            sub(/ \(deleted\)$/, "", root)
+            if (substr(root, length(root) - length(b)) == "/" b)
+                found = 1
+        }
+        END { exit(found ? 0 : 1) }' /proc/self/mountinfo
 }
 
 # Probe whether the upstream lock is actually held right now.
@@ -127,31 +149,19 @@ cleanup_netns() {
     # the locking primitive; the kernel flock held by honk-core is.
 }
 
-hijack_resolv_conf() {
-    local target src
-    target="$(resolv_target)"
+prepare_resolv_conf() {
+    local dns_list LOGICAL_WAN dns
+    local resolv_src="/tmp/resolv.conf"
 
-    # Already mounted: distinguish our own mount from somebody else's.
-    src="$(mount_source_of "$target")"
-
-    # Idempotent: our previous bind mount is already in place.
-    [ "$src" = "$RESOLV_HONK" ] && return 0
-
-    # Another service owns this mount point.
-    # Do not overwrite or unmount somebody else's DNS setup.
-    if [ -n "$src" ]; then
-        log "hijack_resolv_conf: $target already mounted by $src, skipping"
-        return 1
+    if [ -f "$resolv_src" ]; then
+        grep -E '^(search|domain) ' "$resolv_src" > "$RESOLV_HONK" 2>/dev/null || : > "$RESOLV_HONK"
+    else
+        : > "$RESOLV_HONK"
     fi
 
-    # Preserve search/domain lines from the original resolver config.
-    grep -E '^(search|domain) ' "$target" > "$RESOLV_HONK" 2>/dev/null || true
-
-    local dns_list LOGICAL_WAN
     . /lib/functions/network.sh
 
     network_find_wan LOGICAL_WAN 2>/dev/null
-
     if [ -n "$LOGICAL_WAN" ]; then
         dns_list="$(
             ubus call "network.interface.$LOGICAL_WAN" status 2>/dev/null |
@@ -159,7 +169,6 @@ hijack_resolv_conf() {
         )"
     fi
 
-    # Fallback to OpenWrt's generated resolver config.
     if [ -z "$dns_list" ] &&
        [ -f "/tmp/resolv.conf.d/resolv.conf.auto" ]; then
         dns_list="$(
@@ -168,40 +177,63 @@ hijack_resolv_conf() {
         )"
     fi
 
-    local added=0 dns
-
-    for dns in $dns_list; do
-        # Accept IPv4 / IPv6 / scoped IPv6-ish resolver addresses.
-        # Reject anything containing unexpected characters.
-        case "$dns" in
-            *[!0-9a-fA-F:.%]*|'')
-                continue
-                ;;
-        esac
-
-        echo "nameserver $dns" >> "$RESOLV_HONK"
-        added=1
-    done
-
-    # Last-resort bootstrap resolvers.
-    #
-    # These are only used if neither UCI/WAN status nor
-    # resolv.conf.auto supplied a usable nameserver.
-    if [ "$added" -eq 0 ]; then
-        echo "nameserver 119.29.29.29" >> "$RESOLV_HONK"
-        echo "nameserver 223.5.5.5" >> "$RESOLV_HONK"
+    # 不硬编码兜底 DNS：找不到真实上游时宁可放弃接管，
+    # 也不写入伪造 nameserver 污染系统解析
+    if [ -z "$dns_list" ]; then
+        log "prepare_resolv_conf: no usable WAN DNS servers found, skip resolv.conf hijack"
+        rm -f "$RESOLV_HONK" 2>/dev/null || true
+        return 1
     fi
 
-    mount --bind "$RESOLV_HONK" "$target" || {
-        log "hijack_resolv_conf: bind mount failed for $target"
+    for dns in $dns_list; do
+        echo "nameserver $dns" >> "$RESOLV_HONK"
+    done
+
+    chmod 644 "$RESOLV_HONK" 2>/dev/null || true
+}
+
+hijack_resolv_conf() {
+    local resolv_path
+    resolv_path="$(resolv_target)"
+
+    if [ ! -f "$resolv_path" ]; then
+        log "hijack_resolv_conf: $resolv_path does not exist, skip hijack"
+        return 1
+    fi
+
+    # Idempotent: our previous bind mount is already in place.
+    if is_bind_mounted_from "$RESOLV_HONK" "$resolv_path"; then
+        return 0
+    fi
+
+    # Another service owns this mount point.
+    # Do not overwrite or unmount somebody else's DNS setup.
+    if is_mount_target "$resolv_path"; then
+        log "hijack_resolv_conf: resolv.conf is already mounted by another source, skip hijack"
+        return 1
+    fi
+
+    prepare_resolv_conf || {
+        log "hijack_resolv_conf: failed to prepare replacement resolv.conf"
+        rm -f "$RESOLV_HONK"
+        return 1
+    }
+
+    mount --bind "$RESOLV_HONK" "$resolv_path" 2>/dev/null || {
+        log "hijack_resolv_conf: failed to bind resolv.conf"
         rm -f "$RESOLV_HONK"
         return 1
     }
 
     # Keep the temporary resolver read-only while honk is running.
-    mount -o remount,ro,bind "$target" || {
-        log "hijack_resolv_conf: ro remount failed for $target, rolling back"
-        umount "$target" 2>/dev/null || true
+    mount -o remount,bind,ro "$RESOLV_HONK" "$resolv_path" 2>/dev/null || {
+        log "hijack_resolv_conf: ro remount failed for $resolv_path, rolling back"
+        # 回滚时仅在 umount 成功后才删源文件，
+        # 避免“文件已删、挂载仍在”的孤儿状态
+        if ! umount "$resolv_path" 2>/dev/null; then
+            log "hijack_resolv_conf: rollback umount failed, keeping $RESOLV_HONK to avoid orphan mount"
+            return 1
+        fi
         rm -f "$RESOLV_HONK"
         return 1
     }
@@ -210,21 +242,36 @@ hijack_resolv_conf() {
 }
 
 restore_resolv_conf() {
-    local target
-    target="$(resolv_target)"
+    local resolv_path i
+    resolv_path="$(resolv_target)"
 
     # Only unmount the mount created by this init script.
     #
     # Never do a blind `umount "$target"` here because another service may
     # have taken ownership after honk started.
-    if [ "$(mount_source_of "$target")" != "$RESOLV_HONK" ]; then
+    if ! is_bind_mounted_from "$RESOLV_HONK" "$resolv_path"; then
+        if is_mount_target "$resolv_path"; then
+            # 挂载存在但不是我们的 bind：不属于本服务的挂载一律不碰
+            log "restore_resolv_conf: foreign mount on $resolv_path detected, leaving it untouched"
+            return 0
+        fi
         rm -f "$RESOLV_HONK" 2>/dev/null || true
         return 0
     fi
 
     # Restore writeability of the bind mount before unmounting it.
-    mount -o remount,rw,bind "$target" 2>/dev/null || true
-    umount "$target" 2>/dev/null || true
+    mount -o remount,bind,rw "$RESOLV_HONK" "$resolv_path" 2>/dev/null || true
+
+    for i in 1 2 3; do
+        umount "$resolv_path" 2>/dev/null || true
+        is_mount_target "$resolv_path" || break
+        sleep 1
+    done
+
+    if is_mount_target "$resolv_path"; then
+        log "restore_resolv_conf: failed to unmount $resolv_path, system DNS may remain hijacked"
+        return 1
+    fi
 
     rm -f "$RESOLV_HONK" 2>/dev/null || true
 }
