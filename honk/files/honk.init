@@ -168,7 +168,7 @@ hijack_resolv_conf() {
     fi
 
     # Another service owns this mount point.
-    if is_mount_target "$resolv_path" ]; then
+    if is_mount_target "$resolv_path"; then
         log "hijack_resolv_conf: resolv.conf is already mounted by another source, skip hijack"
         return 1
     fi
@@ -207,7 +207,7 @@ restore_resolv_conf() {
 
     # Only unmount our own bind mount; never touch a foreign one.
     if ! is_bind_mounted_from "$RESOLV_HONK" "$resolv_path"; then
-        if is_mount_target "$resolv_path" ]; then
+        if is_mount_target "$resolv_path"; then
             log "restore_resolv_conf: foreign mount on $resolv_path detected, leaving it untouched"
             return 0
         fi
@@ -224,7 +224,7 @@ restore_resolv_conf() {
         sleep 1
     done
 
-    if is_mount_target "$resolv_path" ]; then
+    if is_mount_target "$resolv_path"; then
         log "restore_resolv_conf: failed to unmount $resolv_path, system DNS may remain hijacked"
         return 1
     fi
@@ -373,7 +373,7 @@ report_reload_verdict() {
 hot_reload() {
     set_chmod_640
 
-    if ! /etc/init.d/honk running; then
+    if ! "$0" running; then
         log "hot_reload: service not running, starting"
         start
         return $?
@@ -418,7 +418,7 @@ lock_status() {
         echo "lock state: NOT held (lock file is a crash leftover; honk-core will reuse it)"
     fi
 
-    if /etc/init.d/honk running; then
+    if "$0" running; then
         echo "service: running"
     else
         echo "service: stopped"
