@@ -7,7 +7,7 @@ import { popen } from 'fs';
 const STATS_URL = 'http://127.0.0.1:9090/stats';
 
 function fetchStats() {
-	let fp = popen(`curl -s -m 3 ${STATS_URL}`, 'r');
+	let fp = popen(`curl -fsS -m 3 ${STATS_URL}`, 'r');
 	if (!fp)
 		return null;
 
@@ -42,7 +42,12 @@ return {
 
 				let tx = 0, rx = 0;
 
-				for (let ob in data.outbounds) {
+				for (let i in data.outbounds) {
+					let ob = data.outbounds[i];
+
+					if (!ob)
+						continue;
+
 					tx += ob.upload ?? 0;
 					rx += ob.download ?? 0;
 				}
