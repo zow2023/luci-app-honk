@@ -50,12 +50,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: aarch64_generic
-            sdk: openwrt-24.10
-            pkg_ext: ipk
-          - arch: x86_64
-            sdk: openwrt-24.10
-            pkg_ext: ipk
+          # Honk real datapath requires Linux 6.12+.
+          # OpenWrt 25.12 is the supported stable series.
           - arch: aarch64_generic
             sdk: openwrt-25.12
             pkg_ext: apk
