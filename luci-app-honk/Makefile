@@ -13,7 +13,7 @@ PKG_MAINTAINER:=luci-app-honk maintainers
 
 LUCI_TITLE:=LuCI support for honk
 LUCI_PKGARCH:=all
-LUCI_DEPENDS:=+honk
+LUCI_DEPENDS:=+honk+curl
 
 include $(TOPDIR)/feeds/luci/luci.mk
 
