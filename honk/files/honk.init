@@ -32,6 +32,32 @@ log() {
     logger -t honk "$*"
 }
 
+kernel_supported() {
+    local release major minor
+
+    release="$(uname -r 2>/dev/null)"
+    major="${release%%.*}"
+
+    release="${release#*.}"
+    minor="${release%%.*}"
+
+    case "$major:$minor" in
+        ''|*[!0-9:]*)
+            return 1
+            ;;
+    esac
+
+    if [ "$major" -gt 6 ]; then
+        return 0
+    fi
+
+    if [ "$major" -lt 6 ]; then
+        return 1
+    fi
+
+    [ "$minor" -ge 12 ]
+}
+
 set_chmod_640() {
     mkdir -p /etc/honk/config.d
 
@@ -248,6 +274,11 @@ start_service() {
         log "start_service: $PROG missing or not executable"
         return 1
     }
+
+    if ! kernel_supported; then
+        log "start_service: honk requires Linux 6.12+; found $(uname -r 2>/dev/null || echo unknown)"
+        return 1
+    fi
 
     config_get config_file "config" "config_file" "/etc/honk/config.dae"
 
