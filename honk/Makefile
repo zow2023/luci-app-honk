@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0-only
+# SPDX-License-Identifier: GPL-3.0-only
 
 include $(TOPDIR)/rules.mk
 
@@ -47,7 +47,6 @@ define Package/honk
     +ca-bundle +ip-full \
     +kmod-sched-core +kmod-sched-bpf +kmod-veth +kmod-nft-queue \
     +v2ray-geoip +v2ray-geosite \
-    +@KERNEL_XDP_SOCKETS \
     +HONK_USE_VMLINUX_BTF:vmlinux-btf
 endef
 
