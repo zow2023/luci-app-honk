@@ -18,6 +18,7 @@
                 "/proc/*/stat": [ "read" ],
                 "/proc/net/dev": [ "read" ],
                 "/usr/bin/honk-core": [ "exec" ],
+                "/usr/bin/tail": [ "exec" ],
                 "/etc/init.d/honk": [ "exec" ]
             }
         },
