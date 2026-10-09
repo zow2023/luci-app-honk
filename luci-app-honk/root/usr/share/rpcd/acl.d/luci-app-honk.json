@@ -18,7 +18,7 @@
                 "/proc/*/stat": [ "read" ],
                 "/proc/net/dev": [ "read" ],
                 "/usr/bin/honk-core --version": [ "exec" ],
-                "/usr/bin/tail <待 log.js 确认后填精确命令>": [ "exec" ]
+                "/usr/bin/tail -c 65536 /var/log/honk/honk.log": [ "exec" ]
             }
         },
         "write": {
@@ -28,8 +28,7 @@
                 "/etc/honk/config.d/dns.dae": [ "write" ],
                 "/etc/honk/config.d/node.dae": [ "write" ],
                 "/etc/honk/config.d/route.dae": [ "write" ],
-                "/etc/init.d/honk reload": [ "exec" ],
-                "/etc/init.d/honk running": [ "exec" ]
+                "/etc/init.d/honk": [ "exec" ]
             }
         }
     }
