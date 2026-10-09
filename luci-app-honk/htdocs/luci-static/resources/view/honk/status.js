@@ -64,9 +64,6 @@ return view.extend({
     lastRx: null,
     lastTx: null,
     lastTime: 0,
-    totalRx: 0,
-    totalTx: 0,
-    trafficStorageKey: 'honk_traffic_totals',
 
     updateRunning: false,
     updatePending: false,
@@ -159,80 +156,32 @@ return view.extend({
         return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + sizes[i];
     },
 
-    loadTrafficTotals: function() {
-        try {
-            var saved = window.localStorage.getItem(this.trafficStorageKey);
-            if (!saved)
-                return;
-
-            var data = JSON.parse(saved);
-            if (data && isFinite(data.rx) && isFinite(data.tx) && data.rx >= 0 && data.tx >= 0) {
-                this.totalRx = parseInt(data.rx, 10);
-                this.totalTx = parseInt(data.tx, 10);
-            }
-        }
-        catch (e) {
-            // [fix] 补充 warn 日志，避免 localStorage 异常被完全吞掉
-            console.warn('[honk] loadTrafficTotals error:', e);
-        }
-    },
-
-    saveTrafficTotals: function() {
-        try {
-            window.localStorage.setItem(this.trafficStorageKey, JSON.stringify({
-                rx: this.totalRx,
-                tx: this.totalTx
-            }));
-        }
-        catch (e) {
-            // [fix] 同上，补充 warn 日志
-            console.warn('[honk] saveTrafficTotals error:', e);
-        }
-    },
-
-    updateTrafficTotals: function(traffic) {
+    // [fix] 流量统计改回服务端权威计数器模式（与 meow 一致）：
+    //       - 速率：客户端对服务端计数器做差分（含计数器回落重基线）
+    //       - 总量：直接显示服务端 rx/tx_bytes，语义为"自服务启动以来"
+    //       - 删除 localStorage 客户端累加及每轮询周期的同步写
+    updateTrafficStats: function(traffic) {
         var self = this;
 
+        // Counter reset (service restart): re-baseline, skip this sample.
         if (self.lastRx === null || self.lastTx === null || !self.lastTime ||
             traffic.rx < self.lastRx || traffic.tx < self.lastTx) {
             self.lastRx = traffic.rx;
             self.lastTx = traffic.tx;
             self.lastTime = Date.now();
-
-            if (self.totalRx === 0 && self.totalTx === 0) {
-                self.totalRx = traffic.rx;
-                self.totalTx = traffic.tx;
-                self.saveTrafficTotals();
-            }
-
-            return {
-                rxRate: 0,
-                txRate: 0,
-                totalRx: self.totalRx,
-                totalTx: self.totalTx
-            };
+            return { rxRate: 0, txRate: 0, rx: traffic.rx, tx: traffic.tx };
         }
 
         var now = Date.now();
         var diff = (now - self.lastTime) / 1000;
-        var rxDelta = Math.max(0, traffic.rx - self.lastRx);
-        var txDelta = Math.max(0, traffic.tx - self.lastTx);
-        var rxRate = diff > 0 ? rxDelta / diff : 0;
-        var txRate = diff > 0 ? txDelta / diff : 0;
+        var rxRate = diff > 0 ? Math.max(0, traffic.rx - self.lastRx) / diff : 0;
+        var txRate = diff > 0 ? Math.max(0, traffic.tx - self.lastTx) / diff : 0;
 
-        self.totalRx += rxDelta;
-        self.totalTx += txDelta;
         self.lastRx = traffic.rx;
         self.lastTx = traffic.tx;
         self.lastTime = now;
-        self.saveTrafficTotals();
 
-        return {
-            rxRate: rxRate,
-            txRate: txRate,
-            totalRx: self.totalRx,
-            totalTx: self.totalTx
-        };
+        return { rxRate: rxRate, txRate: txRate, rx: traffic.rx, tx: traffic.tx };
     },
 
     getMemoryUsage: function(pid) {
@@ -441,9 +390,7 @@ return view.extend({
                         if (n.rate)
                             n.rate.textContent = '0 B/s ↑ / 0 B/s ↓';
                         if (n.total)
-                            n.total.textContent =
-                                self.formatBytes(self.totalTx) + ' ↑ / ' +
-                                self.formatBytes(self.totalRx) + ' ↓';
+                            n.total.textContent = '-- / --';
                         return;
                     }
 
@@ -455,7 +402,7 @@ return view.extend({
                         return;
                     }
 
-                    var trafficView = self.updateTrafficTotals(traffic);
+                    var trafficView = self.updateTrafficStats(traffic);
 
                     if (n.rate)
                         n.rate.textContent =
@@ -464,8 +411,8 @@ return view.extend({
 
                     if (n.total)
                         n.total.textContent =
-                            self.formatBytes(trafficView.totalTx) + ' ↑ / ' +
-                            self.formatBytes(trafficView.totalRx) + ' ↓';
+                            self.formatBytes(trafficView.tx) + ' ↑ / ' +
+                            self.formatBytes(trafficView.rx) + ' ↓';
                 });
             })
             .then(function(result) {
@@ -501,8 +448,6 @@ return view.extend({
         // [fix] 在 render() 中将 nodes 初始化为实例自身属性，
         //       避免原型链上的对象被多个实例共享
         self.nodes = {};
-
-        self.loadTrafficTotals();
 
         self.serviceEnabled = uci.get('honk', 'config', 'enabled') === '1';
 
@@ -637,7 +582,7 @@ return view.extend({
                             self.nodes.rate
                         ]),
                         E('div', { 'class': 'honk-traffic-item' }, [
-                            E('div', { 'class': 'honk-label' }, _('Total Traffic (TX/RX)')),
+                            E('div', { 'class': 'honk-label' }, _('Total Traffic (since service start)')),
                             self.nodes.total
                         ])
                     ])
