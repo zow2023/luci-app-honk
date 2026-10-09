@@ -2,13 +2,24 @@
 
 'use strict';
 'require fs';
+'require rpc';
 'require ui';
 'require view';
 
 var CONFIG_PATH = '/etc/honk/config.d/node.dae';
 
+var callServiceList = rpc.declare({
+    object: 'service',
+    method: 'list',
+    params: ['name'],
+    expect: { '': {} }
+});
+
 return view.extend({
     editorInstance: null,
+
+    // [fix] 防抖：避免双击按钮导致并发 fs.write / restart 相互踩踏
+    actionBusy: false,
 
     load: function () {
         return L.resolveDefault(fs.read_direct(CONFIG_PATH, 'text'), '');
@@ -45,25 +56,28 @@ return view.extend({
             });
         }
 
-        return loadScript('/luci-static/resources/honk/lib/codemirror.js').then(function () {
-            return Promise.all([
-                loadScript('/luci-static/resources/honk/addon/edit/matchbrackets.js'),
-                loadScript('/luci-static/resources/honk/addon/fold/foldcode.js'),
-                loadScript('/luci-static/resources/honk/addon/fold/foldgutter.js'),
-                loadScript('/luci-static/resources/honk/addon/fold/indent-fold.js'),
-                loadScript('/luci-static/resources/honk/mode/dae/dae.js')
-            ]);
-        });
+        /* [fix] 串行链式加载：foldgutter 依赖 foldcode，原先的 Promise.all
+                 并行加载在缓存/网络时序不同时会间歇性触发
+                 "CodeMirror.fold is undefined"（与 config.js / dns.js 对齐） */
+        return loadScript('/luci-static/resources/honk/lib/codemirror.js')
+            .then(function () { return loadScript('/luci-static/resources/honk/addon/edit/matchbrackets.js'); })
+            .then(function () { return loadScript('/luci-static/resources/honk/addon/fold/foldcode.js'); })
+            .then(function () { return loadScript('/luci-static/resources/honk/addon/fold/foldgutter.js'); })
+            .then(function () { return loadScript('/luci-static/resources/honk/addon/fold/indent-fold.js'); })
+            .then(function () { return loadScript('/luci-static/resources/honk/mode/dae/dae.js'); });
     },
 
     mountEditor: function (content) {
         var self = this;
-        var textarea = document.getElementById('honk-editor');
-
-        if (!textarea)
-            return Promise.reject(new Error('Editor textarea not found'));
 
         return self.loadAssets().then(function () {
+            /* [fix] 在 Promise 异步完成后获取 textarea 并判空：
+                     原先在 loadAssets 之前同步获取，DOM 未渲染时 reject 的
+                     "Editor textarea not found" 会掩盖真实的加载失败原因 */
+            var textarea = document.getElementById('honk-editor');
+            if (!textarea)
+                return;
+
             self.editorInstance = CodeMirror.fromTextArea(textarea, {
                 mode: 'dae',
                 indentUnit: 4,
@@ -83,6 +97,15 @@ return view.extend({
                     self.editorInstance.refresh();
             }, 100);
         });
+    },
+
+    // [fix] 视图卸载时销毁 CodeMirror 实例（toTextArea 还原 textarea 并解绑
+    //       全部事件监听与 undo 历史），避免 SPA 导航反复进出造成累积泄漏
+    destroy: function () {
+        if (this.editorInstance) {
+            try { this.editorInstance.toTextArea(); } catch (e) {}
+            this.editorInstance = null;
+        }
     },
 
     formatCode: function () {
@@ -105,7 +128,11 @@ return view.extend({
                 return line.replace(/\s+$/, '');
             });
 
-            editor.setValue(formatted.join('\n'));
+            /* [fix] 使用 replaceRange 替换文本，保留撤销/重做历史栈
+                     （原 setValue 会清空 undo 历史） */
+            var lastLine = editor.lineCount() - 1;
+            var lastChar = editor.getLine(lastLine).length;
+            editor.replaceRange(formatted.join('\n'), { line: 0, ch: 0 }, { line: lastLine, ch: lastChar });
 
             for (var i = 0; i < editor.lineCount(); i++)
                 editor.indentLine(i, 'smart');
@@ -131,6 +158,9 @@ return view.extend({
         });
     },
 
+    // [fix] Reload 成功与否不再只看 init 脚本退出码（procd restart 异步，
+    //       退出码 0 ≠ 服务起来了）：延迟后通过 service.list 验证实际运行
+    //       状态，node.dae 写坏时给出明确报错而非假阳性通知
     handleReloadService: function () {
         var self = this;
 
@@ -138,25 +168,61 @@ return view.extend({
             E('p', { 'class': 'spinning' }, _('Reloading service configuration...'))
         ]);
 
-        return self.execServiceAction('reload').then(function () {
-            ui.hideModal();
-            ui.addNotification(
-                null,
-                E('p', _('Service reloaded successfully.')),
-                'info'
-            );
-        }).catch(function (err) {
-            ui.hideModal();
-            ui.addNotification(
-                null,
-                E('p', _('Reload failed: %s').format(err.message || err)),
-                'error'
-            );
-        });
+        return self.execServiceAction('reload')
+            .then(function () {
+                /* procd restart 是异步的：先等它落定再查状态 */
+                return new Promise(function (resolve) { window.setTimeout(resolve, 1500); });
+            })
+            .then(function () {
+                return L.resolveDefault(callServiceList('honk'), {});
+            })
+            .then(function (res) {
+                ui.hideModal();
+
+                var instances = res && res.honk && res.honk.instances;
+                var running = !!(instances && Object.keys(instances).some(function (key) {
+                    return instances[key].running;
+                }));
+
+                if (running)
+                    ui.addNotification(
+                        null,
+                        E('p', _('Service reloaded successfully.')),
+                        'info'
+                    );
+                else
+                    ui.addNotification(
+                        null,
+                        E('p', _('Reload finished but honk is not running. The new configuration was probably rejected; check the log.')),
+                        'error'
+                    );
+            })
+            .catch(function (err) {
+                ui.hideModal();
+                ui.addNotification(
+                    null,
+                    E('p', _('Reload failed: %s').format(err.message || err)),
+                    'error'
+                );
+            });
+    },
+
+    // [fix] busy 期间统一禁用工具栏按钮
+    setToolbarDisabled: function (disabled) {
+        var buttons = document.querySelectorAll('.honk-toolbar button');
+        for (var i = 0; i < buttons.length; i++)
+            buttons[i].disabled = disabled;
     },
 
     savePage: function (applyChanges) {
         var self = this;
+
+        /* [fix] 防抖：动作进行中直接忽略后续触发 */
+        if (self.actionBusy)
+            return Promise.resolve();
+        self.actionBusy = true;
+        self.setToolbarDisabled(true);
+
         var content = self.getEditorValue().replace(/\r\n?/g, '\n');
 
         if (!content.trim()) {
@@ -166,6 +232,8 @@ return view.extend({
                 'error'
             );
 
+            self.actionBusy = false;
+            self.setToolbarDisabled(false);
             return Promise.reject(new Error('Empty configuration'));
         }
 
@@ -190,6 +258,9 @@ return view.extend({
             );
 
             throw err;
+        }).finally(function () {
+            self.actionBusy = false;
+            self.setToolbarDisabled(false);
         });
     },
 
