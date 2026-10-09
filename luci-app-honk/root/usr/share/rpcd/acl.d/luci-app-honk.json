@@ -17,9 +17,7 @@
                 "/proc/*/status": [ "read" ],
                 "/proc/*/stat": [ "read" ],
                 "/proc/net/dev": [ "read" ],
-                "/usr/bin/honk-core": [ "exec" ],
-                "/usr/bin/tail": [ "exec" ],
-                "/etc/init.d/honk": [ "exec" ]
+                "/usr/bin/tail": [ "exec" ]
             }
         },
         "write": {
@@ -29,8 +27,8 @@
                 "/etc/honk/config.d/dns.dae": [ "write" ],
                 "/etc/honk/config.d/node.dae": [ "write" ],
                 "/etc/honk/config.d/route.dae": [ "write" ],
-                "/var/log/honk/honk.log": [ "write" ],
-                "/etc/init.d/honk": [ "exec" ]
+                "/etc/init.d/honk reload": [ "exec" ],
+                "/etc/init.d/honk running": [ "exec" ]
             }
         }
     }
