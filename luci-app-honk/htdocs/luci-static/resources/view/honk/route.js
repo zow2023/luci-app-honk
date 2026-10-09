@@ -61,7 +61,7 @@ return view.extend({
         }
         /* [fix] 串行链式加载：foldgutter 依赖 foldcode，原先的 Promise.all
                  并行加载在缓存/网络时序不同时会间歇性触发
-                 "CodeMirror.fold is undefined"（与 config.js / dns.js / node.js 对齐） */
+                 "CodeMirror.fold is undefined"（与 global.js / dns.js / node.js 对齐） */
         return loadScript('/luci-static/resources/honk/lib/codemirror.js')
             .then(function () { return loadScript('/luci-static/resources/honk/addon/edit/matchbrackets.js'); })
             .then(function () { return loadScript('/luci-static/resources/honk/addon/fold/foldcode.js'); })
@@ -167,6 +167,11 @@ return view.extend({
     pollServiceRunning: function (deadline, onProgress) {
         var self = this;
 
+        /* [fix] 每拍先回调进度（elapsed 由 deadline 反推），使 onProgress
+                 真正生效：原先该参数从未被调用，模态框进度秒数不更新 */
+        if (onProgress)
+            onProgress(Math.max(0, Math.round((RELOAD_VERIFY_TIMEOUT * 1000 - (deadline - Date.now())) / 1000)));
+
         return self.checkServiceRunning().then(function (running) {
             if (running)
                 return true;
@@ -184,6 +189,9 @@ return view.extend({
         });
     },
 
+    /* [fix] Reload 成功与否不再只看 init 脚本退出码（procd restart 异步，
+            退出码 0 ≠ 服务起来了）：轮询验证实际运行状态，超时文案按上游
+            文档要求引导用户以日志中的 applied/rejected 判决为准 */
     handleReloadService: function () {
         var self = this;
 
