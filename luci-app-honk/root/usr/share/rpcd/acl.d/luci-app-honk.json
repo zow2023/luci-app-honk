@@ -17,7 +17,8 @@
                 "/proc/*/status": [ "read" ],
                 "/proc/*/stat": [ "read" ],
                 "/proc/net/dev": [ "read" ],
-                "/usr/bin/tail": [ "exec" ]
+                "/usr/bin/honk-core --version": [ "exec" ],
+                "/usr/bin/tail <待 log.js 确认后填精确命令>": [ "exec" ]
             }
         },
         "write": {
