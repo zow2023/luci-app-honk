@@ -6,6 +6,7 @@ STOP=10
 
 extra_command "hot_reload" "Hot-reload honk-core via SIGHUP; restart is required for process-level settings"
 extra_command "lock_status" "Show honk-core instance lock and service status"
+extra_command "clear_log" "Truncate the honk runtime log (/var/log/honk/honk.log)"
 
 CONF="honk"
 PROG="/usr/bin/honk-core"
@@ -454,4 +455,12 @@ lock_status() {
     else
         echo "service: stopped"
     fi
+}
+
+# Truncate the runtime log. Intended for the LuCI log page: keeps log
+# writes out of the rpcd ACL (the web session can only trigger this
+# root-owned action, never write log content itself — the
+# applied/rejected verdict channel stays unforgeable).
+clear_log() {
+    : > /var/log/honk/honk.log
 }
