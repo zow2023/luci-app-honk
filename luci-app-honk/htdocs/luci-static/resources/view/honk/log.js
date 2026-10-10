@@ -371,13 +371,29 @@ return view.extend({
         });
     },
 
+    // [fix] 与 status.js 对齐：视图卸载时经标准 destroy() 钩子移除 poll，
+    //       替代原先仅依赖 poll 回调内 DOM 查询自检的脆弱方式
+    //       （回调内的 DOM 自检分支保留作双保险）
+    destroy: function () {
+        if (this._pollHandle) {
+            poll.remove(this._pollHandle);
+            this._pollHandle = null;
+        }
+    },
+
     clearLog: function () {
         var self = this;
 
         if (!window.confirm(_('Are you sure you want to clear the log file?')))
             return Promise.resolve();
 
-        return fs.write(LOG_PATH, '').then(function () {
+        /* [fix] 方案 B：清空改走 init 的 root 通道（clear_log action），
+                 会话不再持有日志写权限；applied/rejected 判决通道
+                 因此不可被 web 会话伪造 */
+        return fs.exec('/etc/init.d/honk', ['clear_log']).then(function (res) {
+            if (!res || typeof res.code !== 'undefined' && res.code !== 0)
+                throw new Error((res.stderr || res.stdout || 'clear_log failed').trim());
+
             self.lastLogSize  = 0;
             self.lastLogMtime = null;
             self.logEntriesCache = null;
