@@ -1,20 +1,30 @@
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: AGPL-3.0-only
 
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=honk
-PKG_VERSION:=2026.10.21_p1
+# 由 scripts/update_honk_version.sh 自动写入并保持同步，勿手改。
+# debug 构建: debug.2026.10.21.1 -> 2026.10.21.1_pre1
+# 正式版本: v0.0.1.beta.84      -> 0.0.1_beta84
+PKG_VERSION:=2026.10.21.1_pre1
 PKG_RELEASE:=1
 
 # Raw upstream release tag. It keeps the dots in qualifiers (e.g. v0.0.1.beta.49)
 # because that is what the GitHub release asset name uses.
 HONK_RELEASE_TAG:=debug.2026.10.21.1
 
+# Asset-name segment, kept in sync by scripts/update_honk_version.sh.
+# debug 构建的资产名固定且不含版本号 -> 写 "debug";
+# 正式版资产名内嵌完整 tag         -> 写 tag 本身 (e.g. v0.0.1.beta.84)。
+HONK_ASSET_TAG:=debug
+
 # SHA256 of each release tarball, kept in sync by scripts/update_honk_version.sh.
+# 注意: debug 构建为滚动覆盖发布，同 tag 下二进制可能被上游重建，
+# hash 一律以脚本实测为准，不缓存。
 HONK_HASH_X86_64:=0714b035fb39efcdd9ab5f8b759ccd647847b3fe293ed51b4fafe11603834e3d
 HONK_HASH_AARCH64:=d63a51bf922899ababf5bbddc9913a4a7a6df17fbbeb021a127b85bc740e0568
 
-PKG_LICENSE:=GPL-3.0-only
+PKG_LICENSE:=AGPL-3.0-only
 PKG_LICENSE_FILE:=LICENSE
 PKG_MAINTAINER:=luci-app-honk maintainers
 
@@ -29,13 +39,7 @@ endif
 # Default to the stock-malloc build: lower RSS high-water on small gateways.
 # Use an empty suffix to switch back to the mimalloc build (faster QUIC).
 HONK_SUFFIX:=-stock
-# debug 滚动构建的资产名不含 tag（上游用固定名滚动覆盖）；
-# 正式版资产名内嵌完整 tag。
-ifneq ($(findstring debug.,$(HONK_RELEASE_TAG)),)
-  HONK_ASSET:=honk-core-debug-$(HONK_TARGET)$(HONK_SUFFIX).tar.gz
-else
-  HONK_ASSET:=honk-core-$(HONK_RELEASE_TAG)-$(HONK_TARGET)$(HONK_SUFFIX).tar.gz
-endif
+HONK_ASSET:=honk-core-$(HONK_ASSET_TAG)-$(HONK_TARGET)$(HONK_SUFFIX).tar.gz
 
 PKG_SOURCE:=$(HONK_ASSET)
 PKG_SOURCE_URL:=https://github.com/daeuniverse/honk/releases/download/$(HONK_RELEASE_TAG)/
@@ -53,6 +57,7 @@ define Package/honk
     +ca-bundle +ip-full \
     +kmod-sched-core +kmod-sched-bpf +kmod-veth +kmod-nft-queue \
     +v2ray-geoip +v2ray-geosite \
+    +@KERNEL_XDP_SOCKETS \
     +HONK_USE_VMLINUX_BTF:vmlinux-btf
 endef
 
@@ -72,7 +77,9 @@ define Package/honk/config
 endef
 
 define Package/honk/conffiles
-/etc/honk/
+/etc/honk/config.dae
+/etc/honk/config.d/
+/etc/honk/state/
 /etc/config/honk
 endef
 
@@ -95,6 +102,7 @@ define Package/honk/install
 	$(INSTALL_CONF) $(CURDIR)/files/config.d/route.dae $(1)/etc/honk/config.d/route.dae
 	$(INSTALL_CONF) $(CURDIR)/files/config.d/dns.dae $(1)/etc/honk/config.d/dns.dae
 	$(INSTALL_CONF) $(CURDIR)/files/config.d/api.dae $(1)/etc/honk/config.d/api.dae
+
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) $(CURDIR)/files/honk.config $(1)/etc/config/honk
 
