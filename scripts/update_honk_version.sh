@@ -7,6 +7,9 @@ UPSTREAM_REPO="daeuniverse/honk"
 
 # 官方 debug 滚动构建 tag 形如 debug.2026.10.21.1
 DEBUG_TAG_RE='^debug\.[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]+$'
+# 正式版 tag 宽松白名单: 可选 v/V 前缀 + 数字主段 + 任意非空后缀段
+# (精细解析交给 derive_version, 这里只做 "能否安全进 sed" 的闸门)
+RELEASE_TAG_RE='^[vV]?[0-9]+(\.[0-9]+)*([-_.][A-Za-z0-9._-]+)*$'
 
 git_ls_remote() {
     local attempt
@@ -45,6 +48,8 @@ derive_version() {
     #   纯数字主段 + _pre1 后缀, apk/opkg 均合法;
     #   日序号编码在第四数字段, _pre1 为固定后缀 (不随序号变),
     #   故 debug.2026.10.21.2 -> 2026.10.21.2_pre1 > 2026.10.21.1_pre1, 保序。
+    #   注意: _pre1 使 debug 版永远 < 同数字无后缀版本 (apk 语义
+    #   2026.10.21.1_pre1 < 2026.10.21.1), 即 debug 与正式版共享版本空间时, 正式版被视为"更新"。
     # ASSET_TAG   = debug
     if printf '%s' "$tag" | grep -qE "$DEBUG_TAG_RE"; then
         printf '%s\n' "$tag" \
@@ -120,6 +125,16 @@ assert_apk_version() {
     return 0
 }
 
+# 入口闸门: 校验 tag 是否可安全用于 sed 替换段与下载 URL。
+# 语义上接受两类: 官方 debug 滚动 tag, 或形如 v0.0.1.beta.84 的正式版 tag。
+# 任何含 sed 元字符 (&、\) 或路径分隔符 (/) 的值在此处 fail-fast。
+assert_safe_tag() {
+    local tag="$1"
+    printf '%s' "$tag" | grep -qE "$DEBUG_TAG_RE" && return 0
+    printf '%s' "$tag" | grep -qE "$RELEASE_TAG_RE" && return 0
+    return 1
+}
+
 resolve_tag() {
     # 优先级 1: workflow 注入的、已在 yml 层按 debug 正则过滤过的 tag
     if [ -n "${HONK_TAG_OVERRIDE:-}" ]; then
@@ -152,7 +167,7 @@ resolve_tag() {
 
     # 优先级 4: ls-remote 兜底 (同样按 debug 正则过滤)
     git_ls_remote | awk '{print $2}' | sed 's|refs/tags/||' \
-        | grep -v '\^{}' | grep -E "$DEBUG_TAG_RE" | sort -V | tail -n 1
+        | grep -v '\^{}' | grep -E "$DEBUG_TAG_RE" | sort -V | tail -n 1 || true
 }
 
 resolve_hash() {
@@ -165,11 +180,13 @@ resolve_hash() {
 
     local tmp hash
     tmp="$(mktemp)"
+    trap 'rm -f "$tmp"' RETURN
+
     if ! curl -fsSL --retry 3 --connect-timeout 20 \
         "https://github.com/daeuniverse/honk/releases/download/${tag}/${asset}" -o "$tmp" 2>/dev/null; then
         rm -f "$tmp"
         echo "error: unable to download ${asset} (tag=${tag})" >&2
-        echo "hint: debug 发布非原子性, 若发布正在进行中可稍后重试" >&2
+        echo "hint: debug 发布非原子性, 若发布正在进行中可稍后重试; CI 层可依赖 workflow 自动重跑" >&2
         return 1
     fi
 
@@ -185,8 +202,18 @@ resolve_hash() {
 
 main() {
     local tag version asset_tag suffix hash_x86_64 hash_aarch64
-    tag="$(resolve_tag)"
+
+    # resolve_tag 兜底链整体失败时 (含 pipefail 传播的非零码) 不让 set -e
+    # 在赋值处杀掉脚本, 统一走下方非空校验的友好报错出口。
+    tag="$(resolve_tag || true)"
     [ -n "$tag" ] || { echo "error: unable to resolve honk release tag" >&2; exit 1; }
+
+    # 入口闸门: 无论 tag 来自环境变量还是自动解析, 不在白名单内一律拒绝,
+    # 防止 sed 元字符 / 路径分隔符注入后续替换段与下载 URL。
+    if ! assert_safe_tag "$tag"; then
+        echo "error: refusing unsafe or unrecognized tag '${tag}'" >&2
+        exit 1
+    fi
 
     # derive_version 输出两行: PKG_VERSION, ASSET_TAG
     local derived
@@ -214,7 +241,9 @@ main() {
             ;;
     esac
 
-    suffix="$(grep '^HONK_SUFFIX:=' "$MAKEFILE" | head -n 1 | cut -d= -f2- || true)"
+    # 剥离行内注释与所有空白, 避免把注释文本带进资产下载 URL。
+    suffix="$(grep '^HONK_SUFFIX:=' "$MAKEFILE" | head -n 1 | cut -d= -f2- \
+        | sed -E 's/[#].*$//' | tr -d '[:space:]' || true)"
 
     hash_x86_64="$(resolve_hash "$asset_tag" "x86_64-unknown-linux-musl" "$suffix" "$tag")"
     hash_aarch64="$(resolve_hash "$asset_tag" "aarch64-unknown-linux-musl" "$suffix" "$tag")"
