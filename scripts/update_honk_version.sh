@@ -5,6 +5,9 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MAKEFILE="$REPO_DIR/honk/Makefile"
 UPSTREAM_REPO="daeuniverse/honk"
 
+# 官方 debug 滚动构建 tag 形如 debug.2026.10.21.1
+DEBUG_TAG_RE='^debug\.[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]+$'
+
 git_ls_remote() {
     local attempt
     for attempt in 1 2 3 4 5; do
@@ -30,25 +33,32 @@ calc_sha256() {
 
 derive_version() {
     local tag="$1"
+
+    # [debug 分支] debug.2026.10.21.1 -> 2026.10.21_p1
+    # 用 _pN 而非 _debugN：apk/opkg 版本号后缀白名单里没有 "debug"，
+    # _pN 合法且保证 _p1 < _p2 < ... 的可比较性。
+    if printf '%s' "$tag" | grep -qE "$DEBUG_TAG_RE"; then
+        printf '%s\n' "$tag" \
+            | sed -E 's/^debug\.([0-9]{4}\.[0-9]{2}\.[0-9]{2})\.([0-9]+)$/\1_p\2/'
+        return 0
+    fi
+
+    # ---- 以下为原 v* tag 逻辑，保持不变 ----
     local v="${tag#[vV]}"
     local prefix rest stage stage_num patch_num
     stage=""
     stage_num=""
     patch_num=""
 
-    # 1. 提取主版本号
     prefix="$(printf '%s' "$v" | sed -E 's/^([0-9]+(\.[0-9]+)*).*/\1/')"
     [ -n "$prefix" ] || prefix="0.0.0"
 
-    # 2. 剥离已提取部分及连接符
     rest="${v#"$prefix"}"
     rest="$(printf '%s' "$rest" | sed -E 's/^[-_.]+//')"
 
     if [ -n "$rest" ]; then
-        # 统一小写
         rest="$(printf '%s' "$rest" | tr '[:upper:]' '[:lower:]')"
 
-        # 3. 提取阶段性标签 (alpha/beta/rc 等)
         if printf '%s' "$rest" | grep -qE '^(alpha|beta|pre|rc|cvs|git|hg|svn)'; then
             stage="$(printf '%s' "$rest" | sed -E -n 's/^(alpha|beta|pre|rc|cvs|git|hg|svn).*/\1/p')"
             rest="$(printf '%s' "$rest" | sed -E 's/^(alpha|beta|pre|rc|cvs|git|hg|svn)//' | sed -E 's/^[-_.]+//')"
@@ -60,7 +70,6 @@ derive_version() {
             fi
         fi
 
-        # 4. 提取补丁标签 (抹除所有分隔符，将 fix.fix 压扁为 fixfix)
         if [ -n "$rest" ]; then
             rest="$(printf '%s' "$rest" | sed -E 's/[-_.]//g')"
             if printf '%s' "$rest" | grep -qE '^(fix)+$'; then
@@ -75,57 +84,64 @@ derive_version() {
         fi
     fi
 
-    # 5. 组装合规版本号
     local result="$prefix"
     [ -z "$stage" ] || result="${result}_${stage}${stage_num}"
     [ -z "$patch_num" ] || result="${result}_p${patch_num}"
-    
+
     printf '%s\n' "$result"
 }
 
 assert_apk_version() {
     local v="$1"
-    
-    # 策略 1: 本地 apk 工具校验
+
     if command -v apk >/dev/null 2>&1; then
         apk version -c "$v" >/dev/null 2>&1 && return 0 || return 1
     fi
 
-    # 策略 2: 正则静态分析 (模拟 apk-tools 内部验证器)
     local apk_regex="^[0-9]+(\.[0-9]+)*[a-z]?(_(alpha|beta|pre|rc|cvs|svn|git|hg|p)[0-9]*)*$"
     if ! printf '%s' "$v" | grep -qE "$apk_regex"; then
-        # 策略 3: 若正则存疑且有 Docker 环境，交由官方 Alpine 容器最终裁决
         if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
             docker run --rm alpine apk version -c "$v" >/dev/null 2>&1 && return 0 || return 1
         fi
         return 1
     fi
-    
+
     return 0
 }
 
 resolve_tag() {
+    # 优先级 1: workflow 注入的、已在 yml 层按 debug 正则过滤过的 tag
+    if [ -n "${HONK_TAG_OVERRIDE:-}" ]; then
+        printf '%s\n' "$HONK_TAG_OVERRIDE"
+        return 0
+    fi
+
+    # 优先级 2: 兼容旧变量名
     if [ -n "${HONK_RELEASE_TAG:-}" ]; then
         printf '%s\n' "$HONK_RELEASE_TAG"
         return 0
     fi
 
-    local json="${HONK_RELEASE_JSON:-}"
-    if [ -z "$json" ]; then
-        json="$(curl -fsSL --retry 3 --connect-timeout 15 \
-            "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" 2>/dev/null || true)"
-    fi
+    # 优先级 3: GitHub API 列表端点 + debug 正则过滤。
+    # 注意不能用 /releases/latest —— debug 构建是 prerelease，该端点永远跳过。
+    local json tag
+    json="$(curl -fsSL --retry 3 --connect-timeout 15 \
+        "https://api.github.com/repos/${UPSTREAM_REPO}/releases?per_page=50" 2>/dev/null || true)"
 
     if [ -n "$json" ]; then
-        local tag
-        tag="$(printf '%s' "$json" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)"
+        tag="$(printf '%s' "$json" \
+            | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' \
+            | sed -E 's/^"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)"$/\1/' \
+            | grep -E "$DEBUG_TAG_RE" | head -n 1 || true)"
         if [ -n "$tag" ]; then
             printf '%s\n' "$tag"
             return 0
         fi
     fi
 
-    git_ls_remote | awk '{print $2}' | sed 's|refs/tags/||' | grep -v '\^{}' | sort -V | tail -n 1
+    # 优先级 4: ls-remote 兜底（同样按 debug 正则过滤，避免 sort -V 选中 v* tag）
+    git_ls_remote | awk '{print $2}' | sed 's|refs/tags/||' \
+        | grep -v '\^{}' | grep -E "$DEBUG_TAG_RE" | sort -V | tail -n 1
 }
 
 resolve_hash() {
@@ -133,7 +149,16 @@ resolve_hash() {
     local target="$2"
     local suffix="$3"
     local tag="$4"
-    local asset="honk-core-${tag}-${target}${suffix}.tar.gz"
+    local asset
+
+    # [debug 分支] 滚动资产文件名固定，不含 tag:
+    #   honk-core-debug-<target><suffix>.tar.gz
+    # [v* 分支] 正式版资产名内嵌完整 tag（原逻辑不变）。
+    if printf '%s' "$tag" | grep -qE "$DEBUG_TAG_RE"; then
+        asset="honk-core-debug-${target}${suffix}.tar.gz"
+    else
+        asset="honk-core-${tag}-${target}${suffix}.tar.gz"
+    fi
 
     if [ -n "${!var_name:-}" ]; then
         printf '%s\n' "${!var_name}"
@@ -145,7 +170,8 @@ resolve_hash() {
     if ! curl -fsSL --retry 3 --connect-timeout 20 \
         "https://github.com/daeuniverse/honk/releases/download/${tag}/${asset}" -o "$tmp" 2>/dev/null; then
         rm -f "$tmp"
-        echo "error: unable to download ${asset}" >&2
+        echo "error: unable to download ${asset} (tag=${tag})" >&2
+        echo "hint: debug 发布非原子性，若发布正在进行中可稍后重试" >&2
         return 1
     fi
 
@@ -163,12 +189,11 @@ main() {
     local tag version suffix hash_x86_64 hash_aarch64
     tag="$(resolve_tag)"
     [ -n "$tag" ] || { echo "error: unable to resolve honk release tag" >&2; exit 1; }
-    
+
     version="$(derive_version "$tag")"
 
     if ! assert_apk_version "$version"; then
         echo "WARNING: Parsed version '${version}' is invalid for apk-tools!" >&2
-        # Fallback：仅提取纯数字基准版本号 (剥离不可靠后缀)
         version="$(printf '%s' "${tag#[vV]}" | sed -E 's/^([0-9]+(\.[0-9]+)*).*/\1/')"
         [ -n "$version" ] || version="0.0.0"
         echo "INFO: Falling back to strict safe PKG_VERSION='${version}'" >&2
@@ -181,14 +206,13 @@ main() {
     hash_x86_64="$(resolve_hash HONK_HASH_X86_64 "x86_64-unknown-linux-musl" "$suffix" "$tag")"
     hash_aarch64="$(resolve_hash HONK_HASH_AARCH64 "aarch64-unknown-linux-musl" "$suffix" "$tag")"
 
-    # [绝对鲁棒点] 放弃 sed -i，单次流式替换，完美兼容 macOS/BSD/Linux
     sed -E \
         -e "s/^PKG_VERSION:=.*/PKG_VERSION:=${version}/" \
         -e "s/^HONK_RELEASE_TAG:=.*/HONK_RELEASE_TAG:=${tag}/" \
         -e "s/^HONK_HASH_X86_64:=.*/HONK_HASH_X86_64:=${hash_x86_64}/" \
         -e "s/^HONK_HASH_AARCH64:=.*/HONK_HASH_AARCH64:=${hash_aarch64}/" \
         "$MAKEFILE" > "${MAKEFILE}.tmp"
-    
+
     mv "${MAKEFILE}.tmp" "$MAKEFILE"
 
     echo "==================================="
