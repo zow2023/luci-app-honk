@@ -9,9 +9,6 @@ permissions:
   contents: write
   actions: write
 
-env:
-  HONK_REPO: daeuniverse/honk
-
 jobs:
   update:
     name: Update honk core version
@@ -23,34 +20,31 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Resolve latest official honk release tag
+      - name: Resolve latest official debug tag
         id: resolve
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
 
-          # 方案A：列出最近 50 个非 draft release（含 prerelease，因为上游
-          # 全部版本都是 prerelease，不能用 releases/latest 端点），
-          # 再用 semver 正则过滤，只保留 v0.0.1.beta.N 这类正式系列，
-          # 排除 debug.2026.10.21.1 等调试发布。
-          ALL_TAGS="$(
-            gh release list --repo "${HONK_REPO}" --limit 50 \
+          # 官方 daeuniverse/honk 的 debug 发布形如 debug.2026.10.21.1，
+          # 均为 prerelease（releases/latest 端点拿不到），故必须用列表端点。
+          # 正则只认 debug.YYYY.MM.DD.N，排除 v* 正式版与 draft。
+          TAG="$(
+            gh release list --repo daeuniverse/honk --limit 50 \
               --json tagName,isDraft \
-              --jq '.[] | select(.isDraft == false) | .tagName'
+              --jq '.[] | select(.isDraft == false) | .tagName' \
+            | grep -m1 -E '^debug\.[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]+$' \
+            || true
           )"
 
-          TAG="$(printf '%s\n' "${ALL_TAGS}" \
-            | grep -m1 -E '^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)*$' \
-            || true)"
-
-          if [ -z "${TAG}" ]; then
-            echo "ERROR: no v* semver tag found in the last 50 releases of ${HONK_REPO}" >&2
+          if [ -z "$TAG" ]; then
+            echo "ERROR: no debug.YYYY.MM.DD.N tag found in recent releases" >&2
             exit 1
           fi
 
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Resolved official honk tag: ${TAG}"
+          echo "Resolved official debug tag: ${TAG}"
 
       - name: Update honk version
         env:
@@ -63,12 +57,12 @@ jobs:
           echo "Makefile tag: ${TAG}"
 
           if ! printf '%s\n' "${TAG}" \
-              | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.]+)*$'; then
+              | grep -qE '^debug\.[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]+$'; then
             echo "ERROR: unexpected tag format in Makefile: ${TAG}" >&2
-            echo "This usually means the script picked up a debug.* or malformed release." >&2
+            echo "Expecting debug.YYYY.MM.DD.N from daeuniverse/honk." >&2
             exit 1
           fi
-          echo "OK: semver-style tag"
+          echo "OK: official debug tag"
 
       - name: Commit changes
         id: commit
@@ -97,9 +91,8 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: master
 
-      - name: Trigger build packages
-        if: steps.commit.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh workflow run "Build packages" --ref master
+      #- name: Trigger build packages
+      #  env:
+      #    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+     #   run: |
+      #    gh workflow run "Build packages" --ref master
