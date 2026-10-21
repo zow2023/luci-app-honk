@@ -32,8 +32,8 @@ calc_sha256() {
 }
 
 # 产出两个值:
-#   PKG_VERSION   -- OpenWrt 版本号
-#   ASSET_TAG     -- Makefile 里 HONK_ASSET_TAG 的取值
+#   PKG_VERSION    -- OpenWrt 版本号
+#   ASSET_TAG      -- Makefile 里 HONK_ASSET_TAG 的取值
 #   (debug 构建资产名固定为 honk-core-debug-..., 故 ASSET_TAG=debug;
 #    正式版资产名内嵌完整 tag, 故 ASSET_TAG=tag 本身)
 derive_version() {
@@ -41,12 +41,14 @@ derive_version() {
     local v="${tag#[vV]}"
 
     # ---- [debug 分支] debug.2026.10.21.1 ----
-    # PKG_VERSION = 2026.10.21.1_pre1  (与 Makefile 现有编码一致;
-    #   纯数字主段 + _preN 后缀, apk/opkg 均合法且保序)
+    # PKG_VERSION = 2026.10.21.1_pre1
+    #   纯数字主段 + _pre1 后缀, apk/opkg 均合法;
+    #   日序号编码在第四数字段, _pre1 为固定后缀 (不随序号变),
+    #   故 debug.2026.10.21.2 -> 2026.10.21.2_pre1 > 2026.10.21.1_pre1, 保序。
     # ASSET_TAG   = debug
     if printf '%s' "$tag" | grep -qE "$DEBUG_TAG_RE"; then
         printf '%s\n' "$tag" \
-            | sed -E 's/^debug\.([0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]+)$/\1_pre\1/'
+            | sed -E 's/^debug\.([0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]+)$/\1_pre1/'
         printf 'debug\n'
         return 0
     fi
@@ -194,21 +196,29 @@ main() {
 
     if ! assert_apk_version "$version"; then
         echo "WARNING: Parsed version '${version}' is invalid for apk-tools!" >&2
-        version="$(printf '%s' "${tag#[vV]}" | sed -E 's/^([0-9]+(\.[0-9]+)*).*/\1/')"
+        # fallback 先剥掉非数字前缀 (如 debug.), 再取数字段
+        version="$(printf '%s' "$tag" | sed -E 's/^[^0-9]*//' | sed -E 's/^([0-9]+(\.[0-9]+)*).*/\1/')"
         [ -n "$version" ] || version="0.0.0"
         echo "INFO: Falling back to strict safe PKG_VERSION='${version}'" >&2
     else
         echo "INFO: Validated PKG_VERSION='${version}'" >&2
     fi
 
+    # 出口闸门: 任何原因导致版本号不以数字开头, 直接失败退出,
+    # 绝不把非法值写进 Makefile。
+    case "$version" in
+        [0-9]*) : ;;
+        *)
+            echo "error: PKG_VERSION '${version}' does not start with a digit; refusing to write Makefile" >&2
+            exit 1
+            ;;
+    esac
+
     suffix="$(grep '^HONK_SUFFIX:=' "$MAKEFILE" | head -n 1 | cut -d= -f2- || true)"
 
     hash_x86_64="$(resolve_hash "$asset_tag" "x86_64-unknown-linux-musl" "$suffix" "$tag")"
     hash_aarch64="$(resolve_hash "$asset_tag" "aarch64-unknown-linux-musl" "$suffix" "$tag")"
 
-    # 单次流式替换, 兼容 macOS/BSD/Linux;
-    # HONK_ASSET_TAG 与 Makefile 现有设计对齐 (debug 构建写 "debug",
-    # 正式版写完整 tag), Makefile 的 HONK_ASSET 行无需任何条件分支。
     sed -E \
         -e "s/^PKG_VERSION:=.*/PKG_VERSION:=${version}/" \
         -e "s/^HONK_RELEASE_TAG:=.*/HONK_RELEASE_TAG:=${tag}/" \
