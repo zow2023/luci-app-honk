@@ -6,7 +6,7 @@ PKG_NAME:=honk
 # 由 scripts/update_honk_version.sh 自动写入并保持同步，勿手改。
 # debug 构建: debug.2026.10.21.1 -> 2026.10.21.1_pre1
 # 正式版本: v0.0.1.beta.84      -> 0.0.1_beta84
-PKG_VERSION:=2026.10.21.1_pre1
+PKG_VERSION:=debug.2026.10.21.1
 PKG_RELEASE:=1
 
 # Raw upstream release tag. It keeps the dots in qualifiers (e.g. v0.0.1.beta.49)
