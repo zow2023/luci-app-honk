@@ -29,7 +29,13 @@ endif
 # Default to the stock-malloc build: lower RSS high-water on small gateways.
 # Use an empty suffix to switch back to the mimalloc build (faster QUIC).
 HONK_SUFFIX:=-stock
-HONK_ASSET:=honk-core-$(HONK_RELEASE_TAG)-$(HONK_TARGET)$(HONK_SUFFIX).tar.gz
+# debug 滚动构建的资产名不含 tag（上游用固定名滚动覆盖）；
+# 正式版资产名内嵌完整 tag。
+ifneq ($(findstring debug.,$(HONK_RELEASE_TAG)),)
+  HONK_ASSET:=honk-core-debug-$(HONK_TARGET)$(HONK_SUFFIX).tar.gz
+else
+  HONK_ASSET:=honk-core-$(HONK_RELEASE_TAG)-$(HONK_TARGET)$(HONK_SUFFIX).tar.gz
+endif
 
 PKG_SOURCE:=$(HONK_ASSET)
 PKG_SOURCE_URL:=https://github.com/daeuniverse/honk/releases/download/$(HONK_RELEASE_TAG)/
