@@ -31,20 +31,28 @@ calc_sha256() {
     fi
 }
 
+# 产出两个值:
+#   PKG_VERSION   -- OpenWrt 版本号
+#   ASSET_TAG     -- Makefile 里 HONK_ASSET_TAG 的取值
+#   (debug 构建资产名固定为 honk-core-debug-..., 故 ASSET_TAG=debug;
+#    正式版资产名内嵌完整 tag, 故 ASSET_TAG=tag 本身)
 derive_version() {
     local tag="$1"
+    local v="${tag#[vV]}"
 
-    # [debug 分支] debug.2026.10.21.1 -> 2026.10.21_p1
-    # 用 _pN 而非 _debugN：apk/opkg 版本号后缀白名单里没有 "debug"，
-    # _pN 合法且保证 _p1 < _p2 < ... 的可比较性。
+    # ---- [debug 分支] debug.2026.10.21.1 ----
+    # PKG_VERSION = 2026.10.21.1_pre1  (与 Makefile 现有编码一致;
+    #   纯数字主段 + _preN 后缀, apk/opkg 均合法且保序)
+    # ASSET_TAG   = debug
     if printf '%s' "$tag" | grep -qE "$DEBUG_TAG_RE"; then
         printf '%s\n' "$tag" \
-            | sed -E 's/^debug\.([0-9]{4}\.[0-9]{2}\.[0-9]{2})\.([0-9]+)$/\1_p\2/'
+            | sed -E 's/^debug\.([0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]+)$/\1_pre\1/'
+        printf 'debug\n'
         return 0
     fi
 
-    # ---- 以下为原 v* tag 逻辑，保持不变 ----
-    local v="${tag#[vV]}"
+    # ---- [正式版分支] v0.0.1.beta.84 ----
+    # PKG_VERSION = 0.0.1_beta84, ASSET_TAG = v0.0.1.beta.84
     local prefix rest stage stage_num patch_num
     stage=""
     stage_num=""
@@ -89,6 +97,7 @@ derive_version() {
     [ -z "$patch_num" ] || result="${result}_p${patch_num}"
 
     printf '%s\n' "$result"
+    printf '%s\n' "$tag"
 }
 
 assert_apk_version() {
@@ -123,7 +132,7 @@ resolve_tag() {
     fi
 
     # 优先级 3: GitHub API 列表端点 + debug 正则过滤。
-    # 注意不能用 /releases/latest —— debug 构建是 prerelease，该端点永远跳过。
+    # 不能用 /releases/latest -- debug 构建是 prerelease, 该端点永远跳过。
     local json tag
     json="$(curl -fsSL --retry 3 --connect-timeout 15 \
         "https://api.github.com/repos/${UPSTREAM_REPO}/releases?per_page=50" 2>/dev/null || true)"
@@ -139,31 +148,18 @@ resolve_tag() {
         fi
     fi
 
-    # 优先级 4: ls-remote 兜底（同样按 debug 正则过滤，避免 sort -V 选中 v* tag）
+    # 优先级 4: ls-remote 兜底 (同样按 debug 正则过滤)
     git_ls_remote | awk '{print $2}' | sed 's|refs/tags/||' \
         | grep -v '\^{}' | grep -E "$DEBUG_TAG_RE" | sort -V | tail -n 1
 }
 
 resolve_hash() {
-    local var_name="$1"
+    # $1 = asset_tag (debug 或完整 tag), $2 = target, $3 = suffix, $4 = tag (仅用于 URL 路径)
+    local asset_tag="$1"
     local target="$2"
     local suffix="$3"
     local tag="$4"
-    local asset
-
-    # [debug 分支] 滚动资产文件名固定，不含 tag:
-    #   honk-core-debug-<target><suffix>.tar.gz
-    # [v* 分支] 正式版资产名内嵌完整 tag（原逻辑不变）。
-    if printf '%s' "$tag" | grep -qE "$DEBUG_TAG_RE"; then
-        asset="honk-core-debug-${target}${suffix}.tar.gz"
-    else
-        asset="honk-core-${tag}-${target}${suffix}.tar.gz"
-    fi
-
-    if [ -n "${!var_name:-}" ]; then
-        printf '%s\n' "${!var_name}"
-        return 0
-    fi
+    local asset="honk-core-${asset_tag}-${target}${suffix}.tar.gz"
 
     local tmp hash
     tmp="$(mktemp)"
@@ -171,7 +167,7 @@ resolve_hash() {
         "https://github.com/daeuniverse/honk/releases/download/${tag}/${asset}" -o "$tmp" 2>/dev/null; then
         rm -f "$tmp"
         echo "error: unable to download ${asset} (tag=${tag})" >&2
-        echo "hint: debug 发布非原子性，若发布正在进行中可稍后重试" >&2
+        echo "hint: debug 发布非原子性, 若发布正在进行中可稍后重试" >&2
         return 1
     fi
 
@@ -186,11 +182,15 @@ resolve_hash() {
 }
 
 main() {
-    local tag version suffix hash_x86_64 hash_aarch64
+    local tag version asset_tag suffix hash_x86_64 hash_aarch64
     tag="$(resolve_tag)"
     [ -n "$tag" ] || { echo "error: unable to resolve honk release tag" >&2; exit 1; }
 
-    version="$(derive_version "$tag")"
+    # derive_version 输出两行: PKG_VERSION, ASSET_TAG
+    local derived
+    derived="$(derive_version "$tag")"
+    version="$(printf '%s\n' "$derived" | sed -n 1p)"
+    asset_tag="$(printf '%s\n' "$derived" | sed -n 2p)"
 
     if ! assert_apk_version "$version"; then
         echo "WARNING: Parsed version '${version}' is invalid for apk-tools!" >&2
@@ -203,12 +203,16 @@ main() {
 
     suffix="$(grep '^HONK_SUFFIX:=' "$MAKEFILE" | head -n 1 | cut -d= -f2- || true)"
 
-    hash_x86_64="$(resolve_hash HONK_HASH_X86_64 "x86_64-unknown-linux-musl" "$suffix" "$tag")"
-    hash_aarch64="$(resolve_hash HONK_HASH_AARCH64 "aarch64-unknown-linux-musl" "$suffix" "$tag")"
+    hash_x86_64="$(resolve_hash "$asset_tag" "x86_64-unknown-linux-musl" "$suffix" "$tag")"
+    hash_aarch64="$(resolve_hash "$asset_tag" "aarch64-unknown-linux-musl" "$suffix" "$tag")"
 
+    # 单次流式替换, 兼容 macOS/BSD/Linux;
+    # HONK_ASSET_TAG 与 Makefile 现有设计对齐 (debug 构建写 "debug",
+    # 正式版写完整 tag), Makefile 的 HONK_ASSET 行无需任何条件分支。
     sed -E \
         -e "s/^PKG_VERSION:=.*/PKG_VERSION:=${version}/" \
         -e "s/^HONK_RELEASE_TAG:=.*/HONK_RELEASE_TAG:=${tag}/" \
+        -e "s/^HONK_ASSET_TAG:=.*/HONK_ASSET_TAG:=${asset_tag}/" \
         -e "s/^HONK_HASH_X86_64:=.*/HONK_HASH_X86_64:=${hash_x86_64}/" \
         -e "s/^HONK_HASH_AARCH64:=.*/HONK_HASH_AARCH64:=${hash_aarch64}/" \
         "$MAKEFILE" > "${MAKEFILE}.tmp"
@@ -216,7 +220,7 @@ main() {
     mv "${MAKEFILE}.tmp" "$MAKEFILE"
 
     echo "==================================="
-    echo "honk updated to ${tag} (PKG_VERSION=${version})"
+    echo "honk updated to ${tag} (PKG_VERSION=${version}, HONK_ASSET_TAG=${asset_tag})"
     echo "HONK_HASH_X86_64=${hash_x86_64}"
     echo "HONK_HASH_AARCH64=${hash_aarch64}"
 }
