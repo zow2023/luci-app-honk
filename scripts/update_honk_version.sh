@@ -7,6 +7,8 @@ UPSTREAM_REPO="daeuniverse/honk"
 
 # 官方 debug 滚动构建 tag 形如 debug.2026.10.21.1
 DEBUG_TAG_RE='^debug\.[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]+$'
+# 新预发布线 tag 形如 v0.1.0-beta.2
+BETA_TAG_RE='^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$'
 # 正式版 tag 宽松白名单: 可选 v/V 前缀 + 数字主段 + 任意非空后缀段
 # (精细解析交给 derive_version, 这里只做 "能否安全进 sed" 的闸门)
 RELEASE_TAG_RE='^[vV]?[0-9]+(\.[0-9]+)*([-_.][A-Za-z0-9._-]+)*$'
@@ -58,8 +60,9 @@ derive_version() {
         return 0
     fi
 
-    # ---- [正式版分支] v0.0.1.beta.84 ----
-    # PKG_VERSION = 0.0.1_beta84, ASSET_TAG = v0.0.1.beta.84
+    # ---- [正式版分支] v0.0.1.beta.84 / v0.1.0-beta.2 ----
+    # v0.0.1.beta.84 -> PKG_VERSION = 0.0.1_beta84, ASSET_TAG = v0.0.1.beta.84
+    # v0.1.0-beta.2  -> PKG_VERSION = 0.1.0_beta2,  ASSET_TAG = v0.1.0-beta.2
     local prefix rest stage stage_num patch_num
     stage=""
     stage_num=""
@@ -126,17 +129,19 @@ assert_apk_version() {
 }
 
 # 入口闸门: 校验 tag 是否可安全用于 sed 替换段与下载 URL。
-# 语义上接受两类: 官方 debug 滚动 tag, 或形如 v0.0.1.beta.84 的正式版 tag。
+# 语义上接受三类: 官方 debug 滚动 tag, v0.1.0-beta.N 新预发布线,
+# 或形如 v0.0.1.beta.84 的正式版 tag。
 # 任何含 sed 元字符 (&、\) 或路径分隔符 (/) 的值在此处 fail-fast。
 assert_safe_tag() {
     local tag="$1"
     printf '%s' "$tag" | grep -qE "$DEBUG_TAG_RE" && return 0
+    printf '%s' "$tag" | grep -qE "$BETA_TAG_RE" && return 0
     printf '%s' "$tag" | grep -qE "$RELEASE_TAG_RE" && return 0
     return 1
 }
 
 resolve_tag() {
-    # 优先级 1: workflow 注入的、已在 yml 层按 debug 正则过滤过的 tag
+    # 优先级 1: workflow 注入的、已在 yml 层按白名单正则过滤过的 tag
     if [ -n "${HONK_TAG_OVERRIDE:-}" ]; then
         printf '%s\n' "$HONK_TAG_OVERRIDE"
         return 0
@@ -148,42 +153,46 @@ resolve_tag() {
         return 0
     fi
 
-    # 优先级 3: GitHub API 列表端点 + debug 正则过滤。
+    # 优先级 3: GitHub API 列表端点 + 白名单正则过滤。
     # 不能用 /releases/latest -- debug 构建是 prerelease, 该端点永远跳过。
+    # 上游 release 频繁, per_page 提到 100, 防止久未更新的线被挤出首页。
     local json tag
     json="$(curl -fsSL --retry 3 --connect-timeout 15 \
-        "https://api.github.com/repos/${UPSTREAM_REPO}/releases?per_page=50" 2>/dev/null || true)"
+        "https://api.github.com/repos/${UPSTREAM_REPO}/releases?per_page=100" 2>/dev/null || true)"
 
     if [ -n "$json" ]; then
         tag="$(printf '%s' "$json" \
             | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' \
             | sed -E 's/^"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)"$/\1/' \
-            | grep -E "$DEBUG_TAG_RE" | head -n 1 || true)"
+            | grep -E "${DEBUG_TAG_RE}|${BETA_TAG_RE}" | head -n 1 || true)"
         if [ -n "$tag" ]; then
             printf '%s\n' "$tag"
             return 0
         fi
     fi
 
-    # 优先级 4: ls-remote 兜底 (同样按 debug 正则过滤)
+    # 优先级 4: ls-remote 兜底 (同样按白名单正则过滤)
     git_ls_remote | awk '{print $2}' | sed 's|refs/tags/||' \
-        | grep -v '\^{}' | grep -E "$DEBUG_TAG_RE" | sort -V | tail -n 1 || true
+        | grep -v '\^{}' | grep -E "${DEBUG_TAG_RE}|${BETA_TAG_RE}" \
+        | sort -V | tail -n 1 || true
 }
 
+# $1 = asset_tag, $2 = target, $3 = allocator suffix (-stock 或空),
+# $4 = API variant (-native-api/-full/-clash-api 或空), $5 = tag (仅用于 URL 路径)
 resolve_hash() {
-    # $1 = asset_tag (debug 或完整 tag), $2 = target, $3 = suffix, $4 = tag (仅用于 URL 路径)
     local asset_tag="$1"
     local target="$2"
     local suffix="$3"
-    local tag="$4"
-    local asset="honk-core-${asset_tag}-${target}${suffix}.tar.gz"
+    local variant="$4"
+    local tag="$5"
+    local asset="honk-core-${asset_tag}-${target}${suffix}${variant}.tar.gz"
 
     local tmp hash
     tmp="$(mktemp)"
     trap 'rm -f "$tmp"' RETURN
 
     if ! curl -fsSL --retry 3 --connect-timeout 20 \
-        "https://github.com/daeuniverse/honk/releases/download/${tag}/${asset}" -o "$tmp" 2>/dev/null; then
+        "https://github.com/${UPSTREAM_REPO}/releases/download/${tag}/${asset}" -o "$tmp" 2>/dev/null; then
         rm -f "$tmp"
         echo "error: unable to download ${asset} (tag=${tag})" >&2
         echo "hint: debug 发布非原子性, 若发布正在进行中可稍后重试; CI 层可依赖 workflow 自动重跑" >&2
@@ -201,7 +210,7 @@ resolve_hash() {
 }
 
 main() {
-    local tag version asset_tag suffix hash_x86_64 hash_aarch64
+    local tag version asset_tag suffix variant hash_x86_64 hash_aarch64
 
     # resolve_tag 兜底链整体失败时 (含 pipefail 传播的非零码) 不让 set -e
     # 在赋值处杀掉脚本, 统一走下方非空校验的友好报错出口。
@@ -241,12 +250,19 @@ main() {
             ;;
     esac
 
+    # 读取双变量 (由 update workflow 探测上游资产名后写入):
+    #   HONK_SUFFIX  -- 分配器段, -stock 或空 (mimalloc)
+    #   HONK_VARIANT -- API 段, -native-api/-full/-clash-api 或空 (debug 旧线)
     # 剥离行内注释与所有空白, 避免把注释文本带进资产下载 URL。
     suffix="$(grep '^HONK_SUFFIX:=' "$MAKEFILE" | head -n 1 | cut -d= -f2- \
         | sed -E 's/[#].*$//' | tr -d '[:space:]' || true)"
+    variant="$(grep '^HONK_VARIANT:=' "$MAKEFILE" | head -n 1 | cut -d= -f2- \
+        | sed -E 's/[#].*$//' | tr -d '[:space:]' || true)"
 
-    hash_x86_64="$(resolve_hash "$asset_tag" "x86_64-unknown-linux-musl" "$suffix" "$tag")"
-    hash_aarch64="$(resolve_hash "$asset_tag" "aarch64-unknown-linux-musl" "$suffix" "$tag")"
+    echo "INFO: asset segments: suffix='${suffix}' variant='${variant}'" >&2
+
+    hash_x86_64="$(resolve_hash "$asset_tag" "x86_64-unknown-linux-musl" "$suffix" "$variant" "$tag")"
+    hash_aarch64="$(resolve_hash "$asset_tag" "aarch64-unknown-linux-musl" "$suffix" "$variant" "$tag")"
 
     sed -E \
         -e "s/^PKG_VERSION:=.*/PKG_VERSION:=${version}/" \
@@ -260,6 +276,7 @@ main() {
 
     echo "==================================="
     echo "honk updated to ${tag} (PKG_VERSION=${version}, HONK_ASSET_TAG=${asset_tag})"
+    echo "HONK_SUFFIX='${suffix}' HONK_VARIANT='${variant}'"
     echo "HONK_HASH_X86_64=${hash_x86_64}"
     echo "HONK_HASH_AARCH64=${hash_aarch64}"
 }
