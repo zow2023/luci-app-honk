@@ -30,13 +30,13 @@ HONK_SUFFIX:=-stock
 #   -clash-api  = 仅 Clash API
 #   empty       = debug 旧线资产名没有 API 段 / mimalloc 旧命名。
 # 注意: API 段是编译期开关, 选错变体会导致配置中的对应段启动失败。
-HONK_VARIANT:=-native-api
+HONK_VARIANT:=-clash-api
 
 # SHA256 of each release tarball, kept in sync by scripts/update_honk_version.sh.
 # 注意: debug 构建为滚动覆盖发布，同 tag 下二进制可能被上游重建，
 # hash 一律以脚本实测为准，不缓存。
-HONK_HASH_X86_64:=40ea1cfbf68525a30273675641efed869169732294fe024e4efcf66016f6f57b
-HONK_HASH_AARCH64:=bef60542db1d29fa87ad3b5300d0960a1bd173b7ba1121b423b27985a202eb2c
+HONK_HASH_X86_64:=bbbac672649d76ea2bde98b33331eb5f3e05fac5bc81eccb28b2ca9ce0a9618d
+HONK_HASH_AARCH64:=f49ad2c304c299adb2f86d16469c874a338ab368f875327ec0ef4e670ab3128e
 
 PKG_LICENSE:=AGPL-3.0-only
 PKG_LICENSE_FILE:=LICENSE
