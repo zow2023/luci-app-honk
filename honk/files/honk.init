@@ -319,6 +319,7 @@ start_service() {
     # Restart when the command-line config file changes: several honk
     # global settings are restart-required by upstream.
     procd_set_param file "$config_file"
+    procd_set_param file "$config_file" "/etc/honk/config.d/"
 
     # Fixed datapath devices owned by honk-core.
     procd_set_param netdev \
