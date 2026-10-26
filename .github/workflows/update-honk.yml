@@ -17,7 +17,7 @@ env:
   MAKEFILE: honk/Makefile
   SCRIPT: scripts/update_honk_version.sh
   BRANCH: master
-  HONK_VARIANT_PREFERENCE: 'native-api full clash-api'
+  HONK_VARIANT_PREFERENCE: 'clash-api'
 
 concurrency:
   group: update-honk-version
