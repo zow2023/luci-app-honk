@@ -9,15 +9,19 @@ permissions:
   contents: write
   actions: write
 
-concurrency:
-  group: update-honk-version
-  cancel-in-progress: false
-
+# API 变体偏好顺序: 逐个尝试, 取两个架构上都存在的第一个。
+# 默认 -native-api (最小体积, OpenWrt 网关推荐)。
+# 若 luci/面板依赖 Clash API, 改为: "full native-api clash-api"。
 env:
   UPSTREAM_REPO: daeuniverse/honk
   MAKEFILE: honk/Makefile
   SCRIPT: scripts/update_honk_version.sh
   BRANCH: master
+  HONK_VARIANT_PREFERENCE: 'native-api full clash-api'
+
+concurrency:
+  group: update-honk-version
+  cancel-in-progress: false
 
 jobs:
   update:
@@ -35,7 +39,6 @@ jobs:
       #      debug.2026.10.21.1   滚动快照
       #      v0.1.0-beta.2        新预发布线（当前主线）
       #      v0.0.1.beta.84       旧预发布线
-      #    结果通过 HONK_TAG_OVERRIDE 注入脚本，绕过脚本内部只认 debug 的兜底解析。
       # -----------------------------------------------------------------
       - name: Resolve latest official tag
         id: resolve
@@ -52,13 +55,13 @@ jobs:
           echo "Resolved official tag: ${TAG}"
 
       # -----------------------------------------------------------------
-      # 2. 探测该 tag 实际发布的 tarball 后缀并写回 HONK_SUFFIX。
-      #    脚本用 HONK_SUFFIX 拼资产名但从不更新它，而 v0.1.0-beta.* 的
-      #    资产名多了一个 API 段（-full / -clash-api / -native-api），
-      #    所以这一步必须由 workflow 完成；debug 线则保持 -stock 不变。
+      # 2. 探测该 tag 实际发布的 tarball, 拆出分配器段与 API 段并写回
+      #    HONK_SUFFIX / HONK_VARIANT。上游 v0.1.0-beta.* 的资产命名是
+      #    {allocator}-{API}: -stock-full / -native-api / -stock-clash-api 等;
+      #    debug 旧线只有分配器段 (API 段为空)。
       # -----------------------------------------------------------------
-      - name: Detect asset suffix and patch HONK_SUFFIX
-        id: suffix
+      - name: Detect asset segments and patch Makefile
+        id: segments
         env:
           TAG: ${{ steps.resolve.outputs.tag }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -66,47 +69,55 @@ jobs:
           set -euo pipefail
           T_X86="x86_64-unknown-linux-musl"
           T_ARM="aarch64-unknown-linux-musl"
+          BASE="honk-core-${TAG}"
 
           ASSETS="$(gh api "repos/${UPSTREAM_REPO}/releases/tags/${TAG}" --jq '.assets[].name')"
 
-          # 按优先级挑变体：stock-full > full > stock > 无后缀(mimalloc)
+          read -r -a VARIANTS <<< "$HONK_VARIANT_PREFERENCE"
+
+          # 优先 stock 分配器, 再按偏好顺序挑 API 变体; 最后兜底 mimalloc。
           pick() {
-            local t="$1" name pat
-            for pat in \
-              "^honk-core-.*-${t}-stock-full\.tar\.gz$" \
-              "^honk-core-.*-${t}-full\.tar\.gz$" \
-              "^honk-core-.*-${t}-stock\.tar\.gz$" \
-              "^honk-core-.*-${t}\.tar\.gz$"
-            do
-              name="$(grep -E "$pat" <<<"$ASSETS" | head -n1 || true)"
-              if [ -n "$name" ]; then printf '%s\n' "$name"; return 0; fi
+            local t="$1" alloc var name pat
+            for alloc in "-stock" ""; do
+              for v in "${VARIANTS[@]}"; do
+                var=""
+                [ -n "$v" ] && var="-${v}"
+                pat="^${BASE}-${t}${alloc}${var}\.tar\.gz$"
+                name="$(grep -E "$pat" <<<"$ASSETS" | head -n1 || true)"
+                if [ -n "$name" ]; then printf '%s\n' "$name"; return 0; fi
+              done
             done
             return 1
           }
 
-          # 从资产名剥离前缀与目标三元组，剩下的就是后缀（可能为空）
-          extract_suffix() {
-            local name="$1" t="$2" s
-            s="${name%.tar.gz}"
-            s="${s#honk-core-}"
-            s="${s#*-${t}}"
-            printf '%s\n' "$s"
+          # 从资产名剥离前缀与目标三元组, 剩余部分拆成两段
+          split_segments() {
+            local name="$1" t="$2" rest
+            rest="${name%.tar.gz}"
+            rest="${rest#"${BASE}-${t}"}"
+            if [[ "$rest" == -stock* ]]; then
+              printf '%s %s\n' "-stock" "${rest#-stock}"
+            else
+              printf '%s %s\n' "" "$rest"
+            fi
           }
 
           A_X86="$(pick "$T_X86")" || { echo "ERROR: no x86_64 asset for ${TAG}" >&2; exit 1; }
           A_ARM="$(pick "$T_ARM")" || { echo "ERROR: no aarch64 asset for ${TAG}" >&2; exit 1; }
 
-          SUFFIX_X86="$(extract_suffix "$A_X86" "$T_X86")"
-          SUFFIX_ARM="$(extract_suffix "$A_ARM" "$T_ARM")"
-          [ "$SUFFIX_X86" = "$SUFFIX_ARM" ] || {
-            echo "ERROR: suffix mismatch: x86='${SUFFIX_X86}' arm='${SUFFIX_ARM}'" >&2
+          read -r SUF_X86 VAR_X86 <<< "$(split_segments "$A_X86" "$T_X86")"
+          read -r SUF_ARM VAR_ARM <<< "$(split_segments "$A_ARM" "$T_ARM")"
+          [ "$SUF_X86" = "$SUF_ARM" ] && [ "$VAR_X86" = "$VAR_ARM" ] || {
+            echo "ERROR: segment mismatch: x86=(${SUF_X86},${VAR_X86}) arm=(${SUF_ARM},${VAR_ARM})" >&2
             exit 1
           }
-          SUFFIX="$SUFFIX_X86"
 
-          sed -i "s|^HONK_SUFFIX:=.*|HONK_SUFFIX:=${SUFFIX}|" "$MAKEFILE"
-          echo "suffix=${SUFFIX}" >> "$GITHUB_OUTPUT"
-          echo "HONK_SUFFIX set to '${SUFFIX}'"
+          sed -i "s|^HONK_SUFFIX:=.*|HONK_SUFFIX:=${SUF_X86}|"    "$MAKEFILE"
+          sed -i "s|^HONK_VARIANT:=.*|HONK_VARIANT:=${VAR_X86}|"  "$MAKEFILE"
+
+          echo "suffix=${SUF_X86}"   >> "$GITHUB_OUTPUT"
+          echo "variant=${VAR_X86}"  >> "$GITHUB_OUTPUT"
+          echo "HONK_SUFFIX='${SUF_X86}' HONK_VARIANT='${VAR_X86}'"
           echo "  x86_64 : ${A_X86}"
           echo "  aarch64: ${A_ARM}"
 
@@ -119,22 +130,26 @@ jobs:
         run: bash "$SCRIPT"
 
       # -----------------------------------------------------------------
-      # 4. 校验 Makefile 与本次解析结果一致
+      # 4. 校验 Makefile 与本次探测结果一致
       # -----------------------------------------------------------------
       - name: Sanity check
         env:
           TAG: ${{ steps.resolve.outputs.tag }}
-          EXPECTED_SUFFIX: ${{ steps.suffix.outputs.suffix }}
+          EXPECTED_SUFFIX: ${{ steps.segments.outputs.suffix }}
+          EXPECTED_VARIANT: ${{ steps.segments.outputs.variant }}
         run: |
           set -euo pipefail
+          strip() { sed -E 's/[#].*$//' | tr -d '[:space:]'; }
           M_TAG="$(grep '^HONK_RELEASE_TAG:=' "$MAKEFILE" | head -n1 | cut -d= -f2-)"
-          M_SUF="$(grep '^HONK_SUFFIX:=' "$MAKEFILE" | head -n1 | cut -d= -f2- \
-                     | sed -E 's/[#].*$//' | tr -d '[:space:]')"
+          M_SUF="$(grep '^HONK_SUFFIX:='  "$MAKEFILE" | head -n1 | cut -d= -f2- | strip)"
+          M_VAR="$(grep '^HONK_VARIANT:=' "$MAKEFILE" | head -n1 | cut -d= -f2- | strip)"
           [ "$M_TAG" = "$TAG" ] \
             || { echo "ERROR: Makefile tag '${M_TAG}' != resolved '${TAG}'" >&2; exit 1; }
           [ "$M_SUF" = "$EXPECTED_SUFFIX" ] \
             || { echo "ERROR: HONK_SUFFIX '${M_SUF}' != detected '${EXPECTED_SUFFIX}'" >&2; exit 1; }
-          echo "OK: tag=${M_TAG} HONK_SUFFIX='${M_SUF}'"
+          [ "$M_VAR" = "$EXPECTED_VARIANT" ] \
+            || { echo "ERROR: HONK_VARIANT '${M_VAR}' != detected '${EXPECTED_VARIANT}'" >&2; exit 1; }
+          echo "OK: tag=${M_TAG} suffix='${M_SUF}' variant='${M_VAR}'"
 
       # -----------------------------------------------------------------
       # 5. 提交（porcelain 能捕获新增文件，git diff --quiet 不能）
