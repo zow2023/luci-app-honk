@@ -9,6 +9,16 @@ permissions:
   contents: write
   actions: write
 
+concurrency:
+  group: update-honk-version
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: daeuniverse/honk
+  MAKEFILE: honk/Makefile
+  SCRIPT: scripts/update_honk_version.sh
+  BRANCH: master
+
 jobs:
   update:
     name: Update honk core version
@@ -17,82 +27,144 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: false
 
-      - name: Resolve latest official debug tag
+      # -----------------------------------------------------------------
+      # 1. 解析上游最新 tag（三条版本线一并接受，按创建时间取最新的一个）：
+      #      debug.2026.10.21.1   滚动快照
+      #      v0.1.0-beta.2        新预发布线（当前主线）
+      #      v0.0.1.beta.84       旧预发布线
+      #    结果通过 HONK_TAG_OVERRIDE 注入脚本，绕过脚本内部只认 debug 的兜底解析。
+      # -----------------------------------------------------------------
+      - name: Resolve latest official tag
         id: resolve
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -eu
-
-          # 官方 daeuniverse/honk 的 debug 发布形如 debug.2026.10.21.1，
-          # 均为 prerelease（releases/latest 端点拿不到），故必须用列表端点。
-          # 正则只认 debug.YYYY.MM.DD.N，排除 v* 正式版与 draft。
-          TAG="$(
-            gh release list --repo daeuniverse/honk --limit 50 \
-              --json tagName,isDraft \
-              --jq '.[] | select(.isDraft == false) | .tagName' \
-            | grep -m1 -E '^debug\.[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]+$' \
-            || true
-          )"
-
-          if [ -z "$TAG" ]; then
-            echo "ERROR: no debug.YYYY.MM.DD.N tag found in recent releases" >&2
-            exit 1
-          fi
-
+          set -euo pipefail
+          TAG_RE='^(debug\.[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]+|v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+|v[0-9]+\.[0-9]+\.[0-9]+\.beta\.[0-9]+)$'
+          TAG="$(gh release list --repo "$UPSTREAM_REPO" --limit 100 \
+                   --json tagName,isDraft \
+                   --jq '.[] | select(.isDraft == false) | .tagName' \
+                 | grep -E "$TAG_RE" | head -n1)"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Resolved official debug tag: ${TAG}"
+          echo "Resolved official tag: ${TAG}"
 
-      - name: Update honk version
+      # -----------------------------------------------------------------
+      # 2. 探测该 tag 实际发布的 tarball 后缀并写回 HONK_SUFFIX。
+      #    脚本用 HONK_SUFFIX 拼资产名但从不更新它，而 v0.1.0-beta.* 的
+      #    资产名多了一个 API 段（-full / -clash-api / -native-api），
+      #    所以这一步必须由 workflow 完成；debug 线则保持 -stock 不变。
+      # -----------------------------------------------------------------
+      - name: Detect asset suffix and patch HONK_SUFFIX
+        id: suffix
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          T_X86="x86_64-unknown-linux-musl"
+          T_ARM="aarch64-unknown-linux-musl"
+
+          ASSETS="$(gh api "repos/${UPSTREAM_REPO}/releases/tags/${TAG}" --jq '.assets[].name')"
+
+          # 按优先级挑变体：stock-full > full > stock > 无后缀(mimalloc)
+          pick() {
+            local t="$1" name pat
+            for pat in \
+              "^honk-core-.*-${t}-stock-full\.tar\.gz$" \
+              "^honk-core-.*-${t}-full\.tar\.gz$" \
+              "^honk-core-.*-${t}-stock\.tar\.gz$" \
+              "^honk-core-.*-${t}\.tar\.gz$"
+            do
+              name="$(grep -E "$pat" <<<"$ASSETS" | head -n1 || true)"
+              if [ -n "$name" ]; then printf '%s\n' "$name"; return 0; fi
+            done
+            return 1
+          }
+
+          # 从资产名剥离前缀与目标三元组，剩下的就是后缀（可能为空）
+          extract_suffix() {
+            local name="$1" t="$2" s
+            s="${name%.tar.gz}"
+            s="${s#honk-core-}"
+            s="${s#*-${t}}"
+            printf '%s\n' "$s"
+          }
+
+          A_X86="$(pick "$T_X86")" || { echo "ERROR: no x86_64 asset for ${TAG}" >&2; exit 1; }
+          A_ARM="$(pick "$T_ARM")" || { echo "ERROR: no aarch64 asset for ${TAG}" >&2; exit 1; }
+
+          SUFFIX_X86="$(extract_suffix "$A_X86" "$T_X86")"
+          SUFFIX_ARM="$(extract_suffix "$A_ARM" "$T_ARM")"
+          [ "$SUFFIX_X86" = "$SUFFIX_ARM" ] || {
+            echo "ERROR: suffix mismatch: x86='${SUFFIX_X86}' arm='${SUFFIX_ARM}'" >&2
+            exit 1
+          }
+          SUFFIX="$SUFFIX_X86"
+
+          sed -i "s|^HONK_SUFFIX:=.*|HONK_SUFFIX:=${SUFFIX}|" "$MAKEFILE"
+          echo "suffix=${SUFFIX}" >> "$GITHUB_OUTPUT"
+          echo "HONK_SUFFIX set to '${SUFFIX}'"
+          echo "  x86_64 : ${A_X86}"
+          echo "  aarch64: ${A_ARM}"
+
+      # -----------------------------------------------------------------
+      # 3. 交给仓库脚本：版本映射、sha256 实测、写入 Makefile
+      # -----------------------------------------------------------------
+      - name: Run update script
         env:
           HONK_TAG_OVERRIDE: ${{ steps.resolve.outputs.tag }}
-        run: bash scripts/update_honk_version.sh
+        run: bash "$SCRIPT"
 
-      - name: Sanity check tag in Makefile
+      # -----------------------------------------------------------------
+      # 4. 校验 Makefile 与本次解析结果一致
+      # -----------------------------------------------------------------
+      - name: Sanity check
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+          EXPECTED_SUFFIX: ${{ steps.suffix.outputs.suffix }}
         run: |
-          TAG="$(grep '^HONK_RELEASE_TAG:=' honk/Makefile | cut -d= -f2)"
-          echo "Makefile tag: ${TAG}"
+          set -euo pipefail
+          M_TAG="$(grep '^HONK_RELEASE_TAG:=' "$MAKEFILE" | head -n1 | cut -d= -f2-)"
+          M_SUF="$(grep '^HONK_SUFFIX:=' "$MAKEFILE" | head -n1 | cut -d= -f2- \
+                     | sed -E 's/[#].*$//' | tr -d '[:space:]')"
+          [ "$M_TAG" = "$TAG" ] \
+            || { echo "ERROR: Makefile tag '${M_TAG}' != resolved '${TAG}'" >&2; exit 1; }
+          [ "$M_SUF" = "$EXPECTED_SUFFIX" ] \
+            || { echo "ERROR: HONK_SUFFIX '${M_SUF}' != detected '${EXPECTED_SUFFIX}'" >&2; exit 1; }
+          echo "OK: tag=${M_TAG} HONK_SUFFIX='${M_SUF}'"
 
-          if ! printf '%s\n' "${TAG}" \
-              | grep -qE '^debug\.[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]+$'; then
-            echo "ERROR: unexpected tag format in Makefile: ${TAG}" >&2
-            echo "Expecting debug.YYYY.MM.DD.N from daeuniverse/honk." >&2
-            exit 1
-          fi
-          echo "OK: official debug tag"
-
+      # -----------------------------------------------------------------
+      # 5. 提交（porcelain 能捕获新增文件，git diff --quiet 不能）
+      # -----------------------------------------------------------------
       - name: Commit changes
         id: commit
-        shell: bash
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          if git diff --quiet; then
+          if [ -z "$(git status --porcelain)" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No version change."
           else
-            TAG="$(grep '^HONK_RELEASE_TAG:=' honk/Makefile | cut -d= -f2)"
-
-            git add honk/Makefile
-            git commit -m "honk: update to ${TAG}"
-
+            git add "$MAKEFILE"
+            git commit -m "honk: update to ${{ steps.resolve.outputs.tag }}"
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "Committed update to ${{ steps.resolve.outputs.tag }}"
           fi
 
+      # -----------------------------------------------------------------
+      # 6. 原生 git push（避免第三方 action 依赖）
+      # -----------------------------------------------------------------
       - name: Push changes
         if: steps.commit.outputs.changed == 'true'
-        uses: ad-m/github-push-action@v0.7.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          branch: master
-
-      #- name: Trigger build packages
-      #  env:
-      #    GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-     #   run: |
-      #    gh workflow run "Build packages" --ref master
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git remote set-url origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "HEAD:${BRANCH}"
