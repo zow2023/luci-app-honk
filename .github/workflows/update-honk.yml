@@ -17,7 +17,7 @@ env:
   MAKEFILE: honk/Makefile
   SCRIPT: scripts/update_honk_version.sh
   BRANCH: master
-  HONK_VARIANT_PREFERENCE: '-native-api'
+  HONK_VARIANT_PREFERENCE: 'native-api'
   DOONA_DIR: luci-app-honk/root/etc/honk/doona   # ← 新增：doona 面板嵌入目录
 
 concurrency:
