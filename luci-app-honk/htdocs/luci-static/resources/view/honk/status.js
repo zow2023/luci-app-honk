@@ -18,6 +18,8 @@ var callServiceList = rpc.declare({
     expect: { '': {} }
 });
 
+/* 流量统计走 honk 自带的 native_api（experimental.native_api，
+ * 默认 0.0.0.0:9527），与面板共用同一个监听端口，不再单独使用 clash_api。 */
 var callHonkStats = rpc.declare({
     object: 'honk',
     method: 'getStats',
@@ -188,6 +190,7 @@ return view.extend({
         return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + sizes[i];
     },
 
+    // [fix] 流量统计改回服务端权威计数器模式（与 meow 一致）：
     //       - 速率：客户端对服务端计数器做差分（含计数器回落重基线）
     //       - 总量：直接显示服务端 rx/tx_bytes，语义为"自服务启动以来"
     //       - 删除 localStorage 客户端累加及每轮询周期的同步写
@@ -356,6 +359,7 @@ return view.extend({
     },
 
     /* ------------------------- web panel card ------------------------- */
+    /* 面板 = QiuSimons/luci-app-honk 的实现：native_api { listen / ui / config_write } */
 
     getPanelType: function() {
         var type = uci.get('honk', 'config', 'dashboard');
