@@ -18,6 +18,7 @@ env:
   SCRIPT: scripts/update_honk_version.sh
   BRANCH: master
   HONK_VARIANT_PREFERENCE: 'clash-api'
+  DOONA_DIR: luci-app-honk/root/etc/honk/doona   # ← 新增：doona 面板嵌入目录
 
 concurrency:
   group: update-honk-version
@@ -34,12 +35,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      # -----------------------------------------------------------------
-      # 1. 解析上游最新 tag（三条版本线一并接受，按创建时间取最新的一个）：
-      #      debug.2026.10.21.1   滚动快照
-      #      v0.1.0-beta.2        新预发布线（当前主线）
-      #      v0.0.1.beta.84       旧预发布线
-      # -----------------------------------------------------------------
+      # 1. 解析上游最新 tag
       - name: Resolve latest official tag
         id: resolve
         env:
@@ -54,12 +50,7 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Resolved official tag: ${TAG}"
 
-      # -----------------------------------------------------------------
-      # 2. 探测该 tag 实际发布的 tarball, 拆出分配器段与 API 段并写回
-      #    HONK_SUFFIX / HONK_VARIANT。上游 v0.1.0-beta.* 的资产命名是
-      #    {allocator}-{API}: -stock-full / -native-api / -stock-clash-api 等;
-      #    debug 旧线只有分配器段 (API 段为空)。
-      # -----------------------------------------------------------------
+      # 2. 探测资产段并写回 Makefile
       - name: Detect asset segments and patch Makefile
         id: segments
         env:
@@ -75,7 +66,6 @@ jobs:
 
           read -r -a VARIANTS <<< "$HONK_VARIANT_PREFERENCE"
 
-          # 优先 stock 分配器, 再按偏好顺序挑 API 变体; 最后兜底 mimalloc。
           pick() {
             local t="$1" alloc var name pat
             for alloc in "-stock" ""; do
@@ -90,7 +80,6 @@ jobs:
             return 1
           }
 
-          # 从资产名剥离前缀与目标三元组, 剩余部分拆成两段
           split_segments() {
             local name="$1" t="$2" rest
             rest="${name%.tar.gz}"
@@ -108,8 +97,7 @@ jobs:
           read -r SUF_X86 VAR_X86 <<< "$(split_segments "$A_X86" "$T_X86")"
           read -r SUF_ARM VAR_ARM <<< "$(split_segments "$A_ARM" "$T_ARM")"
           [ "$SUF_X86" = "$SUF_ARM" ] && [ "$VAR_X86" = "$VAR_ARM" ] || {
-            echo "ERROR: segment mismatch: x86=(${SUF_X86},${VAR_X86}) arm=(${SUF_ARM},${VAR_ARM})" >&2
-            exit 1
+            echo "ERROR: segment mismatch" >&2; exit 1;
           }
 
           sed -i "s|^HONK_SUFFIX:=.*|HONK_SUFFIX:=${SUF_X86}|"    "$MAKEFILE"
@@ -117,21 +105,14 @@ jobs:
 
           echo "suffix=${SUF_X86}"   >> "$GITHUB_OUTPUT"
           echo "variant=${VAR_X86}"  >> "$GITHUB_OUTPUT"
-          echo "HONK_SUFFIX='${SUF_X86}' HONK_VARIANT='${VAR_X86}'"
-          echo "  x86_64 : ${A_X86}"
-          echo "  aarch64: ${A_ARM}"
 
-      # -----------------------------------------------------------------
-      # 3. 交给仓库脚本：版本映射、sha256 实测、写入 Makefile
-      # -----------------------------------------------------------------
+      # 3. 运行 honk 版本更新脚本
       - name: Run update script
         env:
           HONK_TAG_OVERRIDE: ${{ steps.resolve.outputs.tag }}
         run: bash "$SCRIPT"
 
-      # -----------------------------------------------------------------
-      # 4. 校验 Makefile 与本次探测结果一致
-      # -----------------------------------------------------------------
+      # 4. 校验 Makefile
       - name: Sanity check
         env:
           TAG: ${{ steps.resolve.outputs.tag }}
@@ -144,16 +125,18 @@ jobs:
           M_SUF="$(grep '^HONK_SUFFIX:='  "$MAKEFILE" | head -n1 | cut -d= -f2- | strip)"
           M_VAR="$(grep '^HONK_VARIANT:=' "$MAKEFILE" | head -n1 | cut -d= -f2- | strip)"
           [ "$M_TAG" = "$TAG" ] \
-            || { echo "ERROR: Makefile tag '${M_TAG}' != resolved '${TAG}'" >&2; exit 1; }
+            || { echo "ERROR: Makefile tag mismatch" >&2; exit 1; }
           [ "$M_SUF" = "$EXPECTED_SUFFIX" ] \
-            || { echo "ERROR: HONK_SUFFIX '${M_SUF}' != detected '${EXPECTED_SUFFIX}'" >&2; exit 1; }
+            || { echo "ERROR: HONK_SUFFIX mismatch" >&2; exit 1; }
           [ "$M_VAR" = "$EXPECTED_VARIANT" ] \
-            || { echo "ERROR: HONK_VARIANT '${M_VAR}' != detected '${EXPECTED_VARIANT}'" >&2; exit 1; }
+            || { echo "ERROR: HONK_VARIANT mismatch" >&2; exit 1; }
           echo "OK: tag=${M_TAG} suffix='${M_SUF}' variant='${M_VAR}'"
 
-      # -----------------------------------------------------------------
-      # 5. 提交（porcelain 能捕获新增文件，git diff --quiet 不能）
-      # -----------------------------------------------------------------
+      # ★ 新增步骤：嵌入 Doona 面板
+      - name: Update doona dashboard
+        run: bash scripts/update_doona.sh
+
+      # 5. 提交（★ 修改：git add 同时覆盖 Makefile 和 doona 目录）
       - name: Commit changes
         id: commit
         run: |
@@ -165,15 +148,13 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No version change."
           else
-            git add "$MAKEFILE"
-            git commit -m "honk: update to ${{ steps.resolve.outputs.tag }}"
+            git add "$MAKEFILE" "$DOONA_DIR"
+            git commit -m "honk: update to ${{ steps.resolve.outputs.tag }}; sync doona dashboard"
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "Committed update to ${{ steps.resolve.outputs.tag }}"
           fi
 
-      # -----------------------------------------------------------------
-      # 6. 原生 git push（避免第三方 action 依赖）
-      # -----------------------------------------------------------------
+      # 6. 原生 git push（保持不变）
       - name: Push changes
         if: steps.commit.outputs.changed == 'true'
         env:
