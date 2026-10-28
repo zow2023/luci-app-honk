@@ -15,12 +15,12 @@ HONK_RELEASE_TAG:=v0.1.0-beta.3
 
 # Asset-name segment, kept in sync by scripts/update_honk_version.sh.
 # debug 构建的资产名固定且不含版本号 -> 写 "debug";
-# 正式版资产名内嵌完整 tag         -> 写 tag 本身 (e.g. v0.1.0-beta.2)。
+# 正式版资产名内嵌完整 tag -> 写 tag 本身 (e.g. v0.1.0-beta.2)。
 HONK_ASSET_TAG:=v0.1.0-beta.3
 
 # Allocator segment, kept in sync by the update workflow.
 # -stock = stockalloc (lower RSS high-water on small gateways);
-# empty  = mimalloc   (faster QUIC, higher peak RSS).
+# empty  = mimalloc (faster QUIC, higher peak RSS).
 HONK_SUFFIX:=-stock
 
 # Upstream API feature segment, kept in sync by the update workflow.
@@ -112,7 +112,7 @@ define Package/honk/install
 	$(INSTALL_CONF) $(CURDIR)/files/config.d/node.dae $(1)/etc/honk/config.d/node.dae
 	$(INSTALL_CONF) $(CURDIR)/files/config.d/route.dae $(1)/etc/honk/config.d/route.dae
 	$(INSTALL_CONF) $(CURDIR)/files/config.d/dns.dae $(1)/etc/honk/config.d/dns.dae
-    $(INSTALL_CONF) $(CURDIR)/files/config.d/api.dae $(1)/etc/honk/config.d/api.dae
+	$(INSTALL_CONF) $(CURDIR)/files/config.d/api.dae $(1)/etc/honk/config.d/api.dae
 
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) $(CURDIR)/files/honk.config $(1)/etc/config/honk
