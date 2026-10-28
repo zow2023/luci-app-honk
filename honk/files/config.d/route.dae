@@ -20,7 +20,7 @@ routing {
     domain(geosite: cn) -> direct
 
     # using proxy for ssh, http, https, and common ports, avoid (bt, or other p2p)
-    dport(22, 80, 443, 8080, 6443, 9090) -> proxy
+    dport(22, 80, 443, 8080, 6443) -> proxy
 
     fallback: direct
 }
