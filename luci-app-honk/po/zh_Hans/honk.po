@@ -191,3 +191,64 @@ msgstr "日志已成功清空。"
 
 msgid "Failed to clear log: %s"
 msgstr "清空日志失败：%s"
+
+# status.js -- web panel card (ported feature)
+msgid "Web Panel"
+msgstr "面板"
+
+msgid "Panel Type"
+msgstr "面板类型"
+
+msgid "None"
+msgstr "无"
+
+msgid "Zashboard"
+msgstr "Zashboard"
+
+msgid "Doona"
+msgstr "Doona"
+
+msgid "installed"
+msgstr "已安装"
+
+msgid "not installed"
+msgstr "未安装"
+
+msgid "Panel disabled"
+msgstr "面板已禁用"
+
+msgid "RPC unavailable"
+msgstr "RPC 不可用"
+
+msgid "Download & install"
+msgstr "下载并安装"
+
+msgid "Update panel"
+msgstr "更新面板"
+
+msgid "Open panel"
+msgstr "打开面板"
+
+msgid "downloading..."
+msgstr "下载中..."
+
+msgid "extracting..."
+msgstr "解压中..."
+
+msgid "Failed to switch panel: %s"
+msgstr "切换面板失败：%s"
+
+msgid "Saved, but the panel files are not installed yet — download the panel first."
+msgstr "已保存，但面板文件尚未安装——请先下载面板。"
+
+msgid "Download error:"
+msgstr "触发下载异常："
+
+msgid "Download did not finish in time."
+msgstr "下载超时未完成。"
+
+msgid "Installation completed successfully!"
+msgstr "安装成功，最新版本已部署。"
+
+msgid "Installation failed. Please check logs."
+msgstr "安装失败，请检查日志。"
