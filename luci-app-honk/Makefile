@@ -16,7 +16,7 @@ LUCI_TITLE:=LuCI support for honk
 LUCI_URL:=https://github.com/zow2023/luci-app-honk
 LUCI_PKGARCH:=all
 
-LUCI_DEPENDS:=+honk +luci-base +rpcd-mod-ucode +curl
+LUCI_DEPENDS:=+honk +luci-base +rpcd-mod-ucode +unzip
 
 include $(TOPDIR)/feeds/luci/luci.mk
 
