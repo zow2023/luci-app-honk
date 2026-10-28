@@ -6,6 +6,7 @@ TARGET_DIR="${1:-$REPO_DIR/luci-app-honk/root/etc/honk/doona}"
 UPSTREAM_REPO="Zakkaus/doona"
 
 REPO_REAL="$(cd "$REPO_DIR" && pwd -P)"
+mkdir -p "$(dirname "$TARGET_DIR")"
 CANON_PARENT="$(cd "$(dirname "$TARGET_DIR")" 2>/dev/null && pwd -P)" || {
     echo "Error: cannot resolve the parent of ${TARGET_DIR}" >&2
     exit 1
