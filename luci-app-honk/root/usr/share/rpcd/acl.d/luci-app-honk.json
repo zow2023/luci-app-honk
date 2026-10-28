@@ -4,7 +4,8 @@
         "read": {
             "ubus": {
                 "service": [ "list" ],
-                "honk": [ "getStats" ]
+                "honk": [ "getStats", "get_dashboard_info", "download_status" ],
+                "luci.honk": [ "status", "reload", "restart", "get_log", "clear_log" ]
             },
             "uci": [ "honk" ],
             "file": {
@@ -12,6 +13,9 @@
                 "/etc/honk/config.d/dns.dae": [ "read" ],
                 "/etc/honk/config.d/node.dae": [ "read" ],
                 "/etc/honk/config.d/route.dae": [ "read" ],
+                "/etc/honk/config.d/": [ "read" ],
+                "/etc/honk/doona/": [ "read" ],
+                "/etc/honk/zashboard/": [ "read" ],
                 "/var/log/honk/honk.log": [ "read" ],
                 "/proc/uptime": [ "read" ],
                 "/proc/*/status": [ "read" ],
@@ -22,12 +26,19 @@
             }
         },
         "write": {
+            "ubus": {
+                "honk": [ "download_dashboard", "switch_dashboard_api" ],
+                "luci.honk": [ "reload", "restart", "clear_log" ]
+            },
             "uci": [ "honk" ],
             "file": {
                 "/etc/honk/config.dae": [ "write" ],
                 "/etc/honk/config.d/dns.dae": [ "write" ],
                 "/etc/honk/config.d/node.dae": [ "write" ],
                 "/etc/honk/config.d/route.dae": [ "write" ],
+                "/etc/honk/config.d/api.dae": [ "write" ],
+                "/etc/honk/doona/": [ "write" ],
+                "/etc/honk/zashboard/": [ "write" ],
                 "/etc/init.d/honk": [ "exec" ]
             }
         }
