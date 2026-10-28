@@ -252,3 +252,12 @@ msgstr "安装成功，最新版本已部署。"
 
 msgid "Installation failed. Please check logs."
 msgstr "安装失败，请检查日志。"
+
+msgid "Failed to load dashboard data: %s"
+msgstr "加载面板数据失败：%s"
+
+msgid "Failed to save/apply configuration: %s"
+msgstr "保存/应用配置失败：%s"
+
+msgid "Total Traffic (since service start)"
+msgstr "累计流量（自服务启动起）"
