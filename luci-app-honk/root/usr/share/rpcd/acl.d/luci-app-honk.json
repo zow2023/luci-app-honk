@@ -5,7 +5,7 @@
             "ubus": {
                 "service": [ "list" ],
                 "honk": [ "getStats", "get_dashboard_info", "download_status" ],
-                "luci.honk": [ "status", "reload", "restart", "get_log", "clear_log" ]
+                "luci.honk": [ "status", "reload", "restart", "get_log", "clear_log", "get_dashboard_info", "download_status" ]
             },
             "uci": [ "honk" ],
             "file": {
@@ -28,7 +28,7 @@
         "write": {
             "ubus": {
                 "honk": [ "download_dashboard", "switch_dashboard_api" ],
-                "luci.honk": [ "reload", "restart", "clear_log" ]
+                "luci.honk": [ "reload", "restart", "clear_log", "download_dashboard", "switch_dashboard_api" ]
             },
             "uci": [ "honk" ],
             "file": {
