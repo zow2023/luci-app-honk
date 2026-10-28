@@ -7,7 +7,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-honk
 PKG_VERSION:=1.1.4
-PKG_RELEASE:=6
+PKG_RELEASE:=7
 
 PKG_LICENSE:=Apache-2.0
 PKG_MAINTAINER:=luci-app-honk maintainers
