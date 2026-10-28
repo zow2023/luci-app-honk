@@ -30,27 +30,27 @@ var callHonkStats = rpc.declare({
 /* ---- Web panel (ported from QiuSimons/luci-app-honk) ---- */
 
 var callPanelInfo = rpc.declare({
-    object: 'honk',
+    object: 'luci.honk',
     method: 'get_dashboard_info',
     params: ['type'],
     expect: { '': {} }
 });
 
 var callPanelDownload = rpc.declare({
-    object: 'honk',
+    object: 'luci.honk',
     method: 'download_dashboard',
     params: ['url', 'type'],
     expect: { '': {} }
 });
 
 var callPanelDownloadStatus = rpc.declare({
-    object: 'honk',
+    object: 'luci.honk',
     method: 'download_status',
     expect: { '': {} }
 });
 
 var callPanelSwitch = rpc.declare({
-    object: 'honk',
+    object: 'luci.honk',
     method: 'switch_dashboard_api',
     params: ['type'],
     expect: { '': {} }
@@ -361,9 +361,9 @@ return view.extend({
     /* ------------------------- web panel card ------------------------- */
     /* 面板 = QiuSimons/luci-app-honk 的实现：native_api { listen / ui / config_write } */
 
+    /* [align] 面板固定为 Doona：不再提供下拉选择，面板类型恒为 'doona' */
     getPanelType: function() {
-        var type = uci.get('honk', 'config', 'dashboard');
-        return (type === 'none' || dash.profiles[type]) ? (type || 'none') : 'none';
+        return 'doona';
     },
 
     renderPanelState: function() {
@@ -371,15 +371,6 @@ return view.extend({
         var n = self.nodes;
         var info = self.panelInfo || {};
         var type = self.getPanelType();
-
-        if (type === 'none') {
-            dom.content(n.panelState, [
-                E('span', { 'class': 'honk-panel-state-idle' }, _('Panel disabled'))
-            ]);
-            if (n.panelOpen) n.panelOpen.disabled = true;
-            if (n.panelDl) n.panelDl.disabled = true;
-            return;
-        }
 
         var profile = dash.getProfile(type);
         var parts = [ E('strong', {}, profile.label()) ];
@@ -420,36 +411,6 @@ return view.extend({
             ]);
             console.warn('[honk] panel info error:', err);
             return {};
-        });
-    },
-
-    onPanelTypeChange: function(type) {
-        var self = this;
-
-        if (self.panelBusy)
-            return Promise.resolve();
-
-        self.panelBusy = true;
-        self.renderPanelState();
-
-        return L.resolveDefault(callPanelSwitch(type), {}).then(function(res) {
-            if (!res.success) {
-                ui.addNotification(null, E('p', {},
-                    _('Failed to switch panel: %s').format(res.message || '?')), 'error');
-                return;
-            }
-
-            if (res.pending_download) {
-                ui.addNotification(null, E('p', {},
-                    _('Saved, but the panel files are not installed yet — download the panel first.')),
-                    'warning');
-            }
-        }).catch(function(err) {
-            ui.addNotification(null, E('p', {},
-                _('Failed to switch panel: %s').format(err.message || err)), 'error');
-        }).then(function() {
-            self.panelBusy = false;
-            return self.loadPanelInfo();
         });
     },
 
@@ -509,7 +470,7 @@ return view.extend({
         var self = this;
         var type = self.getPanelType();
 
-        if (type === 'none' || self.panelBusy)
+        if (self.panelBusy)
             return Promise.resolve();
 
         var profile = dash.getProfile(type);
@@ -601,7 +562,7 @@ return view.extend({
                         self.lastTime = 0;
 
                         if (n.rate)
-                            n.rate.textContent = '0 B/s ↑ / 0 B/s ↓';
+                            n.rate.textContent = '-- / --';
                         if (n.total)
                             n.total.textContent = '-- / --';
                         return;
@@ -674,8 +635,8 @@ return view.extend({
         self.nodes.memory = E('div', { 'class': 'honk-value' }, '--');
         self.nodes.uptime = E('div', { 'class': 'honk-value' }, '--');
         self.nodes.version = E('div', { 'class': 'honk-value' }, self.engineVersion);
-        self.nodes.rate = E('div', { 'class': 'honk-subvalue' }, '0 B/s ↑ / 0 B/s ↓');
-        self.nodes.total = E('div', { 'class': 'honk-subvalue' }, '0 B ↑ / 0 B ↓');
+        self.nodes.rate = E('div', { 'class': 'honk-subvalue' }, '-- / --');
+        self.nodes.total = E('div', { 'class': 'honk-subvalue' }, '-- / --');
 
         self.nodes.autostart = E('button', {
             'id': 'honk_autostart',
@@ -688,22 +649,6 @@ return view.extend({
         });
 
         /* ---- web panel card nodes ---- */
-
-        var panelType = self.getPanelType();
-
-        var panelOptions = [ E('option', { 'value': 'none' }, _('None')) ];
-        Object.keys(dash.profiles).forEach(function(k) {
-            panelOptions.push(E('option', { 'value': k }, dash.profiles[k].label()));
-        });
-
-        self.nodes.panelSelect = E('select', {
-            'class': 'cbi-input-select honk-select',
-            'change': function(ev) {
-                self.onPanelTypeChange(ev.target.value).catch(function() {});
-            }
-        }, panelOptions);
-
-        self.nodes.panelSelect.value = panelType;
 
         self.nodes.panelState = E('div', { 'class': 'honk-panel-state' }, '--');
 
@@ -857,11 +802,6 @@ return view.extend({
 
                 E('section', { 'class': 'honk-section honk-panel' }, [
                     E('h2', {}, _('Web Panel')),
-
-                    E('div', { 'class': 'honk-panel-row' }, [
-                        E('span', { 'class': 'honk-label' }, _('Panel Type')),
-                        self.nodes.panelSelect
-                    ]),
 
                     self.nodes.panelState,
 
