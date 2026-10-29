@@ -345,7 +345,9 @@ function to_num(v) {
 
 function get_stats() {
 	let ep = native_endpoint();
-	let data = native_get('/api/v1/runtime', cached_token);
+	/* [fix] 静态 token 模式下,api.dae 的 secret 本身就是 Bearer 凭证
+	 * (上游 experimental.md 明确,无 /api/v1/auth/login 换 token 流程) */
+	let data = native_get('/api/v1/runtime', cached_token || ep.secret);
 
 	if (type(data) != 'object' && !cached_token) {
 		cached_token = native_login(ep.secret);
@@ -380,7 +382,7 @@ function get_stats() {
 	}
 
 	/* Fallback: builds that still expose the clash-compatible /stats counter */
-	let legacy = native_get('/stats', null);
+	let legacy = native_get('/stats', cached_token || ep.secret);
 	if (type(legacy) == 'object' && type(legacy.outbounds) == 'array') {
 		let tx = 0, rx = 0;
 		for (let ob in legacy.outbounds) {
