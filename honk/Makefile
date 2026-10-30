@@ -6,17 +6,17 @@ PKG_NAME:=honk
 # 由 scripts/update_honk_version.sh 自动写入并保持同步，勿手改。
 # debug 构建: debug.2026.10.21.1 -> 2026.10.21.1_pre1
 # 正式版本: v0.1.0-beta.2       -> 0.1.0_beta2
-PKG_VERSION:=0.1.0_beta3
+PKG_VERSION:=0.1.0_beta4
 PKG_RELEASE:=1
 
 # Raw upstream release tag. It keeps the dots in qualifiers (e.g. v0.0.1.beta.49)
 # because that is what the GitHub release asset name uses.
-HONK_RELEASE_TAG:=v0.1.0-beta.3
+HONK_RELEASE_TAG:=v0.1.0-beta.4
 
 # Asset-name segment, kept in sync by scripts/update_honk_version.sh.
 # debug 构建的资产名固定且不含版本号 -> 写 "debug";
 # 正式版资产名内嵌完整 tag -> 写 tag 本身 (e.g. v0.1.0-beta.2)。
-HONK_ASSET_TAG:=v0.1.0-beta.3
+HONK_ASSET_TAG:=v0.1.0-beta.4
 
 # Allocator segment, kept in sync by the update workflow.
 # -stock = stockalloc (lower RSS high-water on small gateways);
@@ -35,8 +35,8 @@ HONK_VARIANT:=-native-api
 # SHA256 of each release tarball, kept in sync by scripts/update_honk_version.sh.
 # 注意: debug 构建为滚动覆盖发布，同 tag 下二进制可能被上游重建，
 # hash 一律以脚本实测为准，不缓存。
-HONK_HASH_X86_64:=c839b648a443abde8b9bbc8290ebc3c6cd6a5c3e579f391a79016304820354ff
-HONK_HASH_AARCH64:=216ace91ba157f909fca2ecf1f3b33015251b9481382609542fc6907dd521602
+HONK_HASH_X86_64:=0f74f6ebe14e5809546cd9bfab97716438a96c0df2684741f35c3d0664da2683
+HONK_HASH_AARCH64:=6dee922a25f1381e8811a4cd2c173a14bdf2448023fed1b4707d7e83ea3dd06b
 
 PKG_LICENSE:=AGPL-3.0-only
 PKG_LICENSE_FILE:=LICENSE
