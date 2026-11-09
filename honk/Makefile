@@ -3,9 +3,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=honk
-# 由 scripts/update_honk_version.sh 自动写入并保持同步，勿手改。
-# debug 构建: debug.2026.10.21.1 -> 2026.10.21.1_pre1
-# 正式版本: v0.1.0-beta.2       -> 0.1.0_beta2
+
 PKG_VERSION:=0.1.0_beta6
 PKG_RELEASE:=1
 
@@ -65,7 +63,7 @@ define Package/honk
   TITLE:=honk - eBPF transparent proxy engine (dae-compatible)
   URL:=https://github.com/daeuniverse/honk
   DEPENDS:=@(x86_64||aarch64) \
-    +ca-bundle +ip-full \
+    +ca-bundle \
     +kmod-sched-core +kmod-sched-bpf +kmod-veth +kmod-nft-queue \
     +v2ray-geoip +v2ray-geosite \
     +@KERNEL_XDP_SOCKETS \
