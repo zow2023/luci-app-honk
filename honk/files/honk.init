@@ -318,7 +318,7 @@ start_service() {
 
     # Restart when the command-line config file changes: several honk
     # global settings are restart-required by upstream.
-    procd_set_param file "$config_file"
+    # restart-required by upstream.
     procd_set_param file "$config_file" "/etc/honk/config.d/"
 
     # Fixed datapath devices owned by honk-core.
@@ -390,11 +390,11 @@ report_reload_verdict() {
         tail -n 1
     )"
 
-    if [ -n "$verdict" ]; then
+        if [ -n "$verdict" ]; then
         log "hot_reload: verdict: $verdict"
         echo "honk hot_reload verdict: $verdict"
     else
-        log "hot_reload: no applied/rejected line seen yet; check the runtime log manually"
+        log "hot_reload: no verdict line seen yet; check the runtime log manually"
         echo "honk hot_reload: no verdict line found in logread yet, verify manually"
     fi
 }
