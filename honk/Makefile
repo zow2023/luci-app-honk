@@ -36,7 +36,7 @@ HONK_VARIANT:=-native-api
 HONK_HASH_X86_64:=d0e8b42ea1e5238f1bcb9707c22d178d417e519f5921db913d3c35aa359409f4
 HONK_HASH_AARCH64:=be9152ee2034be834200af2abb1bbc9616210d94b948eafa8680f77d87be88a7
 
-PKG_LICENSE:=AGPL-3.0-only
+PKG_LICENSE:=GPL-3.0-only
 PKG_LICENSE_FILE:=LICENSE
 PKG_MAINTAINER:=luci-app-honk maintainers
 
@@ -63,10 +63,10 @@ define Package/honk
   TITLE:=honk - eBPF transparent proxy engine (dae-compatible)
   URL:=https://github.com/daeuniverse/honk
   DEPENDS:=@(x86_64||aarch64) \
-    +ca-bundle \
+    +ca-bundle +ip-full +tc-tiny \
     +kmod-sched-core +kmod-sched-bpf +kmod-veth +kmod-nft-queue \
     +v2ray-geoip +v2ray-geosite \
-    +@KERNEL_XDP_SOCKETS \
+    +@KERNEL_CGROUP_BPF \
     +HONK_USE_VMLINUX_BTF:vmlinux-btf
 endef
 
