@@ -17,8 +17,8 @@ HONK_RELEASE_TAG:=v0.1.0-beta.6
 HONK_ASSET_TAG:=v0.1.0-beta.6
 
 # Allocator segment, kept in sync by the update workflow.
-# -stock = stockalloc (lower RSS high-water on small gateways);
-# empty  = mimalloc (faster QUIC, higher peak RSS).
+# empty  = jemalloc (default in >= v0.1.0-beta.6; lower RSS than mimalloc,
+#           runtime tuning via _RJEM_MALLOC_CONF).
 HONK_SUFFIX:=-stock
 
 # Upstream API feature segment, kept in sync by the update workflow.
@@ -26,7 +26,7 @@ HONK_SUFFIX:=-stock
 #   -native-api = 仅原生 API (最小体积, OpenWrt 网关推荐)
 #   -full       = Clash API + 原生 API + 内嵌 doona UI (功能超集)
 #   -clash-api  = 仅 Clash API
-#   empty       = debug 旧线资产名没有 API 段 / mimalloc 旧命名。
+#   empty       = debug 旧线资产名没有 API 段 / mimalloc 旧命名，beta.6 起默认构建为 jemalloc。
 # 注意: API 段是编译期开关, 选错变体会导致配置中的对应段启动失败。
 HONK_VARIANT:=-native-api
 
