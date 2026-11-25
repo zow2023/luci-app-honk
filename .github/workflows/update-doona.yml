@@ -1,0 +1,91 @@
+name: Update Doona Dashboard
+
+on:
+  schedule:
+    - cron: '37 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repo-auto-updates
+  cancel-in-progress: false
+
+env:
+  DOONA_DIR: luci-app-honk/root/etc/honk/doona
+  LUCI_MAKEFILE: luci-app-honk/Makefile
+  BRANCH: master
+
+jobs:
+  update-doona:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 1
+
+      - name: Update Doona dashboard
+        run: |
+          set -euo pipefail
+
+          bash scripts/update_doona.sh "$GITHUB_WORKSPACE/$DOONA_DIR"
+
+      - name: Check dashboard changes
+        id: check-changes
+        run: |
+          set -euo pipefail
+
+          git add "$DOONA_DIR"
+
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Doona dashboard is already up to date."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Doona dashboard has changed."
+          fi
+
+      - name: Bump LuCI package release
+        if: steps.check-changes.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+
+          CURRENT_RELEASE="$(sed -n -E \
+            's/^[[:space:]]*PKG_RELEASE[[:space:]]*:?=[[:space:]]*([0-9]+).*$/\1/p' \
+            "$LUCI_MAKEFILE" | head -n 1)"
+
+          if ! [[ "$CURRENT_RELEASE" =~ ^[0-9]+$ ]]; then
+            echo "::error::Cannot find a valid numeric PKG_RELEASE in $LUCI_MAKEFILE"
+            exit 1
+          fi
+
+          NEXT_RELEASE=$((CURRENT_RELEASE + 1))
+
+          sed -i -E \
+            "s/^([[:space:]]*PKG_RELEASE[[:space:]]*:?=[[:space:]]*)[0-9]+/\1${NEXT_RELEASE}/" \
+            "$LUCI_MAKEFILE"
+
+          echo "PKG_RELEASE: $CURRENT_RELEASE -> $NEXT_RELEASE"
+
+          git add "$LUCI_MAKEFILE"
+
+      - name: Commit and push changes
+        if: steps.check-changes.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --cached --quiet; then
+            echo "No staged changes to commit."
+            exit 0
+          fi
+
+          git commit -m "luci-app-honk: sync Doona dashboard"
+
+          git push origin "HEAD:${BRANCH}"
